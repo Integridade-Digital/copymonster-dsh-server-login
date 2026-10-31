@@ -39,7 +39,7 @@ import {
 // both backends. This is process-global and idempotent.
 types.setTypeParser(20, (value: string) => Number(value))
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -83,6 +83,7 @@ export class PgAdapter implements DbAdapter {
           created_at: createdAt,
           approved_by: null,
           uid,
+          supabase_sub: null,
         }
       })
     } catch (e) {
@@ -107,6 +108,11 @@ export class PgAdapter implements DbAdapter {
     return rows.length > 0 ? toUser(rows[0] as Record<string, unknown>) : undefined
   }
 
+  async findUserBySupabaseSub(supabaseSub: string): Promise<User | undefined> {
+    const { rows } = await this.pool.query(`SELECT ${USER_COLS} FROM users WHERE supabase_sub = $1`, [supabaseSub])
+    return rows.length > 0 ? toUser(rows[0] as Record<string, unknown>) : undefined
+  }
+
   async listPublicUsers(): Promise<PublicUser[]> {
     const { rows } = await this.pool.query(`SELECT ${USER_COLS} FROM users ORDER BY created_at ASC`)
     return rows.map((row) => toPublicUser(toUser(row as Record<string, unknown>)))
@@ -123,6 +129,10 @@ export class PgAdapter implements DbAdapter {
         ? await this.pool.query('UPDATE users SET role = $1 WHERE id = $2', [role, id])
         : await this.pool.query('UPDATE users SET role = $1, approved_by = $2 WHERE id = $3', [role, approvedBy, id])
     return (result.rowCount ?? 0) > 0
+  }
+
+  async setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void> {
+    await this.pool.query('UPDATE users SET supabase_sub = $1 WHERE id = $2', [supabaseSub, userId])
   }
 
   async setUserUid(userId: string, uid: number): Promise<void> {
@@ -172,7 +182,7 @@ export class PgAdapter implements DbAdapter {
   async findSessionWithUser(tokenHash: string): Promise<SessionUser | undefined> {
     const { rows } = await this.pool.query(
       `SELECT u.id, u.username, u.pass_hash, u.role, u.home_dir, u.api_key_ref, u.created_at, u.approved_by, u.uid,
-              s.expires_at
+              u.supabase_sub, s.expires_at
        FROM sessions s JOIN users u ON s.user_id = u.id
        WHERE s.token_hash = $1`,
       [tokenHash],

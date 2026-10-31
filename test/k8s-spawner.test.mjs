@@ -64,7 +64,14 @@ function makeClients() {
 }
 
 function spawner(clients) {
-  const config = resolveConfig({ deployMode: 'k8s', controlPlaneImage: 'acr/cp:tag', dshImage: 'acr/dsh:tag' })
+  const config = resolveConfig({
+    deployMode: 'k8s',
+    controlPlaneImage: 'acr/cp:tag',
+    dshImage: 'acr/dsh:tag',
+    supabaseUrl: 'https://test.supabase.co',
+    supabaseAnonKey: 'test',
+    sessionSecret: 'test-session-secret-32-characters!!',
+  })
   const db = { findUserInstance: async () => undefined }
   return new K8sSpawner(config, db, async () => 'sk-test', async () => 100042, clients)
 }
@@ -146,7 +153,14 @@ test('k8s: ensureSecret is idempotent (no 409 on relaunch)', async () => {
 })
 
 test('k8s: ensureFileService fails loudly without a control-plane image', async () => {
-  const config = resolveConfig({ deployMode: 'k8s', controlPlaneImage: '', dshImage: 'acr/dsh:tag' })
+  const config = resolveConfig({
+    deployMode: 'k8s',
+    controlPlaneImage: '',
+    dshImage: 'acr/dsh:tag',
+    supabaseUrl: 'https://test.supabase.co',
+    supabaseAnonKey: 'test',
+    sessionSecret: 'test-session-secret-32-characters!!',
+  })
   const s = new K8sSpawner(config, { findUserInstance: async () => undefined }, async () => null, async () => 100042, makeClients())
   await assert.rejects(() => s.ensureFileService('u1'), /CONTROL_PLANE_IMAGE/, 'missing image is a hard failure')
 })

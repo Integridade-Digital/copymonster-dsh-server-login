@@ -28,6 +28,8 @@ export interface DbAdapter {
   findUserByUsername(username: string): Promise<User | undefined>
   findUserBySlug(slug: string): Promise<User | undefined>
   findUserById(id: string): Promise<User | undefined>
+  findUserBySupabaseSub(supabaseSub: string): Promise<User | undefined>
+  setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void>
   listPublicUsers(): Promise<PublicUser[]>
   countAdmins(): Promise<number>
   setUserRole(id: string, role: UserRole, approvedBy?: string): Promise<boolean>

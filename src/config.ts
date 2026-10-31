@@ -74,6 +74,14 @@ export interface ServerConfig {
   k8sServiceAccount: string
   /** This replica's identity for leader election (POD_NAME, else hostname). */
   podName: string
+  /** Supabase project URL (required for Supabase Auth integration). */
+  supabaseUrl: string
+  /** Supabase anon/public key (required for Supabase Auth integration). */
+  supabaseAnonKey: string
+  /** HMAC key for the signed `sid` cookie; shared with the main app. */
+  sessionSecret: string
+  /** Base URL of the main app that owns Supabase session-token exchange. */
+  mainAppUrl: string
 }
 
 /** Untyped overrides collected from argv / env. */
@@ -105,6 +113,10 @@ export interface ConfigOverrides {
   egressCidrs?: string[]
   k8sServiceAccount?: string
   podName?: string
+  supabaseUrl?: string
+  supabaseAnonKey?: string
+  sessionSecret?: string
+  mainAppUrl?: string
 }
 
 const DEFAULT_HOST = '127.0.0.1'
@@ -133,6 +145,22 @@ const DEFAULT_DEPLOY_MODE: DeployMode = 'local'
 const DEFAULT_K8S_NAMESPACE = 'dsh'
 const DEFAULT_K8S_SERVICE_ACCOUNT = 'dsh-orchestrator'
 const DEFAULT_IMAGE_PULL_SECRET = 'dsh-acr-pull'
+const DEFAULT_MAIN_APP_URL = 'http://127.0.0.1:3080'
+
+function requireSessionSecret(value: string | undefined): string {
+  if (value === undefined || value.length < 32) {
+    throw new Error('SESSION_SECRET must be set to at least 32 characters')
+  }
+  return value
+}
+
+function requireEnv(name: string): string {
+  const value = process.env[name]
+  if (value === undefined || value === '') {
+    throw new Error(`Missing required environment variable: ${name}`)
+  }
+  return value
+}
 
 /** Load the encryption secret from env, or persist a generated one at
  * `<dataRoot>/secret.key` (0600) so it survives restarts without setup. */
@@ -238,5 +266,10 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     k8sServiceAccount:
       overrides.k8sServiceAccount ?? process.env.DSH_SERVER_LOGIN_K8S_SERVICE_ACCOUNT ?? DEFAULT_K8S_SERVICE_ACCOUNT,
     podName: overrides.podName ?? process.env.POD_NAME ?? hostname(),
+    supabaseUrl: overrides.supabaseUrl ?? requireEnv('DSH_SERVER_LOGIN_SUPABASE_URL'),
+    supabaseAnonKey: overrides.supabaseAnonKey ?? requireEnv('DSH_SERVER_LOGIN_SUPABASE_ANON_KEY'),
+    sessionSecret: overrides.sessionSecret ?? requireSessionSecret(process.env.SESSION_SECRET),
+    mainAppUrl:
+      overrides.mainAppUrl ?? process.env.DSH_SERVER_LOGIN_MAIN_APP_URL ?? DEFAULT_MAIN_APP_URL,
   }
 }

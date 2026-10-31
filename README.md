@@ -77,7 +77,7 @@ node lib/cli.js --port 3080 --db ./dev.local.db
 
 ## 配置
 
-环境变量均可省略；同名 CLI flag（`--port` / `--db` / `--isolation-mode` 等）优先级更高，全部见 `src/config.ts` 与 `node lib/cli.js --help`。
+除 `SESSION_SECRET`、`DSH_SERVER_LOGIN_SUPABASE_URL`、`DSH_SERVER_LOGIN_SUPABASE_ANON_KEY` 外，环境变量均可省略；同名 CLI flag（`--port` / `--db` / `--isolation-mode` 等）优先级更高，全部见 `src/config.ts` 与 `node lib/cli.js --help`。
 
 | 环境变量 | 默认 | 说明 |
 |---|---|---|
@@ -91,6 +91,10 @@ node lib/cli.js --port 3080 --db ./dev.local.db
 | `DSH_SERVER_LOGIN_BASE_DOMAIN` | 空 | 每用户子域名的基域（如 `dsh.example.com`）；空 = 仅子路径访问 |
 | `DSH_SERVER_LOGIN_COOKIE_DOMAIN` | 空 | 会话 cookie 的 `Domain`（如 `.dsh.example.com`，注意前导点）；空 = host-only |
 | `DSH_SERVER_LOGIN_SESSION_TTL` | `604800` | 会话有效期（秒，默认 7 天） |
+| `SESSION_SECRET` | 无（必填） | `sid` cookie 的 HMAC 密钥（至少 32 字符）；必须与主应用一致 |
+| `DSH_SERVER_LOGIN_SUPABASE_URL` | 无（必填） | Supabase 项目 URL |
+| `DSH_SERVER_LOGIN_SUPABASE_ANON_KEY` | 无（必填） | Supabase anon key |
+| `DSH_SERVER_LOGIN_MAIN_APP_URL` | `http://127.0.0.1:3080` | 主应用地址；编排器向其 `/api/auth/session-token` 换取规范用户资料 |
 | `DSH_SERVER_LOGIN_MAX_UPLOAD` | `25MB` | 上传请求体上限（base64 JSON） |
 | `DSH_SERVER_LOGIN_RESTART_BACKOFF` | `1000` | 子 DSH 崩溃后的自动重启延迟（毫秒） |
 | `DSH_SERVER_LOGIN_ENABLE_PATCH` | `false` | 是否向子 DSH 注入 `--patch`（运行时插件 + 每文件夹插件；旧版 dsh 不支持时可关） |

@@ -15,8 +15,7 @@ import { dirname, join } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { Agent, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'node:http'
 import { connect } from 'node:net'
-import { hashSessionToken, parseCookie } from '../web/auth.js'
-import { requireAuth } from '../web/middleware/authn.js'
+import { requireAuth, resolveSessionUser } from '../web/middleware/authn.js'
 import type { Endpoint } from './spawner.js'
 
 // Keep-alive pool for per-user DSH upstreams. Replaced (not just destroyed) on a
@@ -80,7 +79,7 @@ function realOrigin(headers: IncomingHttpHeaders): string | undefined {
 }
 
 /** A subdomain resolution: a tunnelable endpoint, an error to return, or null (not a subdomain). */
-type SubdomainAccess = { endpoint: Endpoint } | { error: string; code: number } | null
+type SubdomainAccess = { endpoint: Endpoint; userId: string } | { error: string; code: number } | null
 
 /**
  * The client-facing host, preferring `X-Forwarded-Host`. The control plane sits
@@ -109,17 +108,16 @@ async function resolveSubdomainAccess(
   if (slug === null) return null
   const target = await app.db.findUserBySlug(slug)
   if (target === undefined) return { error: 'unknown_user', code: 404 }
-  const token = parseCookie(cookieHeader, 'sid')
-  const session = token === undefined ? undefined : await app.db.findSessionWithUser(hashSessionToken(token))
-  if (session === undefined || session.expiresAt <= Date.now() || session.user.role === 'disabled') {
+  const user = await resolveSessionUser(app, cookieHeader)
+  if (user === undefined) {
     return { error: 'unauthorized', code: 401 }
   }
-  if (session.user.username.toLowerCase() !== slug) {
+  if (user.username.toLowerCase() !== slug) {
     return { error: 'forbidden', code: 403 }
   }
-  const endpoint = await app.supervisor.endpointFor(session.user.id)
+  const endpoint = await app.supervisor.endpointFor(user.id)
   if (endpoint === undefined) return { error: 'not_running', code: 404 }
-  return { endpoint }
+  return { endpoint, userId: user.id }
 }
 
 function proxyHttp(
@@ -256,9 +254,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
         return
       }
       const upstream = connect({ host: access.endpoint.host, port: access.endpoint.port })
-      const token = parseCookie(req.headers.cookie, 'sid')
-      const sess = token ? await app.db.findSessionWithUser(hashSessionToken(token)) : undefined
-      if (sess && app.supervisor.registerWebSocket) app.supervisor.registerWebSocket(sess.user.id, upstream)
+      if (app.supervisor.registerWebSocket) app.supervisor.registerWebSocket(access.userId, upstream)
       upstream.on('connect', () => {
         const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`]
         for (let i = 0; i < req.rawHeaders.length; i += 2) {

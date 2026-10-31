@@ -19,6 +19,8 @@ export interface User {
   approved_by: string | null
   /** Assigned Linux uid; null until backfilled/assigned (legacy rows). */
   uid: number | null
+  /** Supabase Auth user ID (sub claim), for linking local user to Supabase. */
+  supabase_sub: string | null
 }
 
 /** The user shape safe to return over the wire. */
@@ -148,6 +150,7 @@ export function toUser(row: Record<string, unknown>): User {
     created_at: row.created_at as number,
     approved_by: (row.approved_by as string | null) ?? null,
     uid: (row.uid as number | null) ?? null,
+    supabase_sub: (row.supabase_sub as string | null) ?? null,
   }
 }
 

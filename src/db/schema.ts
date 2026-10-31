@@ -214,6 +214,17 @@ ALTER TABLE dsh_instances ADD COLUMN folder TEXT;
 ALTER TABLE dsh_instances ADD COLUMN patch TEXT;
 `
 
+// v5: Supabase Auth integration — link local users to Supabase `sub` (UUID).
+// SQLite: add column without UNIQUE first (can't add UNIQUE to non-empty table), then create unique index.
+const SQLITE_V5 = `
+ALTER TABLE users ADD COLUMN supabase_sub TEXT;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_supabase_sub ON users(supabase_sub);
+`
+
+const PG_V5 = `
+ALTER TABLE users ADD COLUMN supabase_sub TEXT UNIQUE;
+`
+
 interface Migration {
   version: number
   name: string
@@ -226,6 +237,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 2, name: 'credential vault enabled flag', sqlite: SQLITE_V2, pg: PG_V2 },
   { version: 3, name: 'per-user uid', sqlite: SQLITE_V3, pg: PG_V3 },
   { version: 4, name: 'instance desired state', sqlite: SQLITE_V4, pg: PG_V4 },
+  { version: 5, name: 'supabase sub link', sqlite: SQLITE_V5, pg: PG_V5 },
 ]
 
 /** Apply unapplied SQLite migrations inside a single transaction. */

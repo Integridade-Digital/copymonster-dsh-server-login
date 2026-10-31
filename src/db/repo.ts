@@ -34,7 +34,7 @@ import {
   type Workspace,
 } from './types.js'
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -58,6 +58,7 @@ export function createUser(db: Database, input: CreateUserInput, baseUid: number
       created_at: createdAt,
       approved_by: null,
       uid,
+      supabase_sub: null,
     }
   })()
 }
@@ -75,6 +76,11 @@ export function findUserBySlug(db: Database, slug: string): User | undefined {
 
 export function findUserById(db: Database, id: string): User | undefined {
   const row = prepare(db, `SELECT ${USER_COLS} FROM users WHERE id = ?`).get(id)
+  return row ? toUser(row as Record<string, unknown>) : undefined
+}
+
+export function findUserBySupabaseSub(db: Database, supabaseSub: string): User | undefined {
+  const row = prepare(db, `SELECT ${USER_COLS} FROM users WHERE supabase_sub = ?`).get(supabaseSub)
   return row ? toUser(row as Record<string, unknown>) : undefined
 }
 
@@ -96,6 +102,10 @@ export function setUserRole(db: Database, id: string, role: UserRole, approvedBy
       ? prepare(db, 'UPDATE users SET role = ? WHERE id = ?').run(role, id)
       : prepare(db, 'UPDATE users SET role = ?, approved_by = ? WHERE id = ?').run(role, approvedBy, id)
   return info.changes > 0
+}
+
+export function setUserSupabaseSub(db: Database, userId: string, supabaseSub: string): void {
+  prepare(db, 'UPDATE users SET supabase_sub = ? WHERE id = ?').run(supabaseSub, userId)
 }
 
 export function createSession(db: Database, input: CreateSessionInput): void {
@@ -285,7 +295,7 @@ export function findSessionWithUser(db: Database, tokenHash: string): SessionUse
   const row = prepare(
     db,
     `SELECT u.id, u.username, u.pass_hash, u.role, u.home_dir, u.api_key_ref, u.created_at, u.approved_by, u.uid,
-            s.expires_at
+            u.supabase_sub, s.expires_at
      FROM sessions s JOIN users u ON s.user_id = u.id
      WHERE s.token_hash = ?`,
   ).get(tokenHash) as Record<string, unknown> | undefined

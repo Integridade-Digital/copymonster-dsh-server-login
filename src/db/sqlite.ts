@@ -31,6 +31,7 @@ import {
   findUserById as findUserByIdSync,
   findUserBySlug as findUserBySlugSync,
   findUserByUsername as findUserByUsernameSync,
+  findUserBySupabaseSub as findUserBySupabaseSubSync,
   findUserInstance as findUserInstanceSync,
   findWorkspaceByPath as findWorkspaceByPathSync,
   getEnabledCredentialKeyRef as getEnabledCredentialKeyRefSync,
@@ -47,6 +48,7 @@ import {
   setFolderPlugins as setFolderPluginsSync,
   setInstanceStatus as setInstanceStatusSync,
   setUserRole as setUserRoleSync,
+  setUserSupabaseSub as setUserSupabaseSubSync,
   setUserUid as setUserUidSync,
   upsertDomain as upsertDomainSync,
   upsertInstance as upsertInstanceSync,
@@ -95,6 +97,10 @@ export class SqliteAdapter implements DbAdapter {
     return findUserByIdSync(this.db, id)
   }
 
+  async findUserBySupabaseSub(supabaseSub: string): Promise<User | undefined> {
+    return findUserBySupabaseSubSync(this.db, supabaseSub)
+  }
+
   async listPublicUsers(): Promise<PublicUser[]> {
     return listPublicUsersSync(this.db)
   }
@@ -105,6 +111,10 @@ export class SqliteAdapter implements DbAdapter {
 
   async setUserRole(id: string, role: UserRole, approvedBy?: string): Promise<boolean> {
     return setUserRoleSync(this.db, id, role, approvedBy)
+  }
+
+  async setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void> {
+    setUserSupabaseSubSync(this.db, userId, supabaseSub)
   }
 
   async setUserUid(userId: string, uid: number): Promise<void> {
