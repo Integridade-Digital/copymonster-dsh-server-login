@@ -1,9 +1,9 @@
 <!doctype html>
-<html lang="pt-BR">
+<html lang="en">
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Cadastro — CopyMonster</title>
+    <title>Register — CopyMonster</title>
     <link rel="icon" href="/logo.svg" />
     <link rel="stylesheet" href="/design.css" />
   </head>
@@ -13,22 +13,22 @@
         <img class="logo" src="/logo.svg" alt="CopyMonster" />
         <span class="wordmark">CopyMonster</span>
       </div>
-      <p class="auth-sub">Cadastro sujeito à aprovação do admin</p>
+      <p class="auth-sub">Create your CopyMonster account</p>
 
       <form id="register">
         <div class="field">
-          <label for="username">Usuário (3–32 caracteres: letras, números, _ ou -)</label>
+          <label for="username">Username (3–32 chars: letters, numbers, _ or -)</label>
           <input id="username" name="username" autocomplete="username" required />
         </div>
         <div class="field">
-          <label for="password">Senha (mín. 8 caracteres)</label>
+          <label for="password">Password (min. 8 characters)</label>
           <input id="password" name="password" type="password" autocomplete="new-password" required />
         </div>
-        <button class="btn primary" type="submit">Cadastrar</button>
+        <button class="btn primary" type="submit">Register</button>
         <p class="msg" id="msg"></p>
       </form>
 
-      <p class="auth-alt">Já tem conta? <a href="/login.html">Entrar</a></p>
+      <p class="auth-alt">Already have an account? <a href="/login.html">Login</a></p>
     </div>
 
     <script>
@@ -45,11 +45,11 @@
         })
         const body = await res.json().catch(() => ({}))
         if (!res.ok) {
-          msg.textContent = body.error === 'username_taken' ? 'Usuário já existe' : body.message || 'Cadastro falhou'
+          msg.textContent = body.error === 'username_taken' ? 'Username already exists' : body.message || 'Registration failed'
           return
         }
         msg.className = 'msg ok'
-        msg.textContent = 'Cadastro realizado! Aguarde aprovação do admin.'
+        msg.textContent = 'Registration successful! Please check your email to verify your account.'
         form.reset()
       })
     </script>

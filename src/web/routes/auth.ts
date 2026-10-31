@@ -1,6 +1,6 @@
 /**
- * Auth routes: self-registration (→ pending), login, logout, and the current
- * identity. Registration always yields a `pending` user; an admin approves it.
+ * Auth routes: self-registration (→ active), login, logout, password reset,
+ * and the current identity. Registration creates an active user directly.
  * @module dsh-server-login/web/routes/auth
  */
 
@@ -231,10 +231,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       // Create the user first so `initUserRoot` resolves the DB-assigned uid
       // (baseUid + row_id) instead of the hash fallback — the per-user Pods and
       // the DSH Pod must run as the *same* uid or the DSH cannot write its dirs.
-      const user = await app.db.createUser({ id, username, passHash, role: 'pending', homeDir })
+      const user = await app.db.createUser({ id, username, passHash, role: 'active', homeDir })
       await app.userFs.initUserRoot(id, user.uid ?? undefined)
       await app.db.audit(id, 'register', JSON.stringify({ username }))
-      return reply.code(201).send({ user: { id, username, role: 'pending' } })
+      return reply.code(201).send({ user: { id, username, role: 'active' } })
     },
   )
 
@@ -270,6 +270,79 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     reply.header('set-cookie', clearSessionCookie(app.config.secureCookies, app.config.cookieDomain))
     return { ok: true }
   })
+
+  const forgotSchema = {
+    body: {
+      type: 'object',
+      required: ['email'],
+      additionalProperties: false,
+      properties: {
+        email: { type: 'string', format: 'email', maxLength: 254 },
+      },
+    },
+  } as const
+
+  app.post(
+    '/api/auth/forgot',
+    { schema: forgotSchema, config: { rateLimit: { max: 3, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const { email } = request.body as { email: string }
+      const supabaseUrl = process.env.DSH_SERVER_LOGIN_SUPABASE_URL
+      const supabaseAnonKey = process.env.DSH_SERVER_LOGIN_SUPABASE_ANON_KEY
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return reply.code(500).send({ error: 'not_configured' })
+      }
+      const res = await fetch(`${supabaseUrl}/auth/v1/recover`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          apikey: supabaseAnonKey,
+        },
+        body: JSON.stringify({ email }),
+      })
+      if (!res.ok) {
+        return reply.code(400).send({ error: 'request_failed' })
+      }
+      return { ok: true }
+    },
+  )
+
+  const resetSchema = {
+    body: {
+      type: 'object',
+      required: ['token', 'password'],
+      additionalProperties: false,
+      properties: {
+        token: { type: 'string', minLength: 10, maxLength: 4096 },
+        password: { type: 'string', minLength: 8, maxLength: 128 },
+      },
+    },
+  } as const
+
+  app.post(
+    '/api/auth/reset',
+    { schema: resetSchema, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const { token, password } = request.body as { token: string; password: string }
+      const supabaseUrl = process.env.DSH_SERVER_LOGIN_SUPABASE_URL
+      const supabaseAnonKey = process.env.DSH_SERVER_LOGIN_SUPABASE_ANON_KEY
+      if (!supabaseUrl || !supabaseAnonKey) {
+        return reply.code(500).send({ error: 'not_configured' })
+      }
+      const res = await fetch(`${supabaseUrl}/auth/v1/verify`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          apikey: supabaseAnonKey,
+        },
+        body: JSON.stringify({ token, type: 'recovery', password }),
+      })
+      if (!res.ok) {
+        return reply.code(400).send({ error: 'invalid_token' })
+      }
+      return { ok: true }
+    },
+  )
 
   app.get('/api/auth/me', { preHandler: requireAuth }, async (request) => ({ user: request.user }))
 

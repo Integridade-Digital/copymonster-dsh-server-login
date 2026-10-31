@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Reset Password — CopyMonster</title>
+    <link rel="icon" href="/logo.svg" />
+    <link rel="stylesheet" href="/design.css" />
+  </head>
+  <body class="auth-bg">
+    <div class="auth-card">
+      <div class="auth-brand">
+        <img class="logo" src="/logo.svg" alt="CopyMonster" />
+        <span class="wordmark">CopyMonster</span>
+      </div>
+      <p class="auth-sub">Set a new password</p>
+
+      <form id="reset">
+        <input type="hidden" id="token" name="token" />
+        <div class="field">
+          <label for="password">New password (min. 8 characters)</label>
+          <input id="password" name="password" type="password" autocomplete="new-password" required />
+        </div>
+        <div class="field">
+          <label for="confirm">Confirm new password</label>
+          <input id="confirm" name="confirm" type="password" autocomplete="new-password" required />
+        </div>
+        <button class="btn primary" type="submit">Reset password</button>
+        <p class="msg" id="msg"></p>
+      </form>
+
+      <p class="auth-alt"><a href="/login.html">Back to login</a></p>
+    </div>
+
+    <script>
+      const params = new URLSearchParams(window.location.search)
+      const token = params.get('token')
+      const form = document.getElementById('reset')
+      const msg = document.getElementById('msg')
+      const tokenInput = document.getElementById('token')
+      if (token) tokenInput.value = token
+
+      form.addEventListener('submit', async (event) => {
+        event.preventDefault()
+        msg.textContent = ''
+        msg.className = 'msg err'
+        if (form.password.value !== form.confirm.value) {
+          msg.textContent = 'Passwords do not match'
+          return
+        }
+        const res = await fetch('/api/auth/reset', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ token: tokenInput.value, password: form.password.value }),
+        })
+        const body = await res.json().catch(() => ({}))
+        if (!res.ok) {
+          msg.textContent = body.error === 'invalid_token' ? 'Invalid or expired reset token' : body.message || 'Reset failed'
+          return
+        }
+        msg.className = 'msg ok'
+        msg.textContent = 'Password reset successful! Redirecting to login...'
+        setTimeout(() => { location.href = '/login.html' }, 2000)
+      })
+    </script>
+  </body>
+</html>
