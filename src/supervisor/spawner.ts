@@ -77,4 +77,6 @@ export interface Spawner {
   /** Make the user's file sidecar exist and be ready (k8s). No-op under local,
    * where the control plane touches the volume in-process. */
   ensureFileService(userId: string): Promise<void>
+  registerWebSocket?(userId: string, socket: any): void
+  touchActivity?(userId: string): void
 }

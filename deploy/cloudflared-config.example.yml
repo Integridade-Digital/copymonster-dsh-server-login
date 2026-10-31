@@ -1,0 +1,19 @@
+# Cloudflare Tunnel Ingress Configuration (/etc/cloudflared/config.yml)
+# Segregating Main SaaS App (3080) and Isolated Subdomains (3081)
+
+tunnel: <SEU-TUNNEL-UUID>
+credentials-file: /etc/cloudflared/<SEU-TUNNEL-UUID>.json
+
+ingress:
+  # 1. Main CopyMonster SaaS Web App & API
+  - hostname: app.copymonster.co
+    service: http://127.0.0.1:3080
+
+  # 2. Per-Tenant Isolated Sandboxes (*.app.copymonster.co) -> Orchestrator
+  - hostname: "*.app.copymonster.co"
+    service: http://127.0.0.1:3081
+    originRequest:
+      noTLSVerify: false
+
+  # 3. Catch-all fallback
+  - service: http_status:404

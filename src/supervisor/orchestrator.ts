@@ -44,6 +44,9 @@ export class LocalSpawner implements Spawner {
   private readonly watchdogs = new Map<string, Instance>()
   private readonly children = new Map<string, ChildProcess>()
   private readonly restartTimers = new Map<string, NodeJS.Timeout>()
+  private readonly activeWsSockets = new Map<string, Set<any>>()
+  private readonly idleTimers = new Map<string, NodeJS.Timeout>()
+  private readonly IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes idle timeout
 
   private readonly portGuard: PortGuard | undefined
 
@@ -60,7 +63,9 @@ export class LocalSpawner implements Spawner {
   /** Spawn the resident main DSH for a user (watchdog is pulled up on demand). */
   async launch(userId: string, folder: string, patch?: string): Promise<Instance> {
     if (this.mains.has(userId)) throw new AlreadyRunningError(userId)
-    return await this.spawnInstance(userId, 'main', folder, patch)
+    const inst = await this.spawnInstance(userId, 'main', folder, patch)
+    this.scheduleIdleShutdown(userId)
+    return inst
   }
 
   /** Stop the current main (clean) and respawn it with the same folder/patch. */
@@ -104,6 +109,47 @@ export class LocalSpawner implements Spawner {
     if (watchdog !== undefined) this.killInstance(userId, watchdog)
     this.mains.delete(userId)
     this.watchdogs.delete(userId)
+    this.touchActivity(userId)
+    this.activeWsSockets.delete(userId)
+  }
+
+  touchActivity(userId: string): void {
+    const timer = this.idleTimers.get(userId)
+    if (timer !== undefined) {
+      clearTimeout(timer)
+      this.idleTimers.delete(userId)
+    }
+  }
+
+  registerWebSocket(userId: string, socket: any): void {
+    this.touchActivity(userId)
+    let set = this.activeWsSockets.get(userId)
+    if (!set) {
+      set = new Set()
+      this.activeWsSockets.set(userId, set)
+    }
+    set.add(socket)
+
+    const cleanup = () => {
+      set?.delete(socket)
+      if ((set?.size ?? 0) === 0) {
+        this.scheduleIdleShutdown(userId)
+      }
+    }
+    socket.once('close', cleanup)
+    socket.once('end', cleanup)
+    socket.once('error', cleanup)
+  }
+
+  private scheduleIdleShutdown(userId: string): void {
+    this.touchActivity(userId)
+    const timer = setTimeout(async () => {
+      const activeCount = this.activeWsSockets.get(userId)?.size ?? 0
+      if (activeCount === 0 && this.mains.has(userId)) {
+        await this.stop(userId).catch(() => {})
+      }
+    }, this.IDLE_TIMEOUT_MS)
+    this.idleTimers.set(userId, timer)
   }
 
   /** Stop every tracked process on shutdown. */

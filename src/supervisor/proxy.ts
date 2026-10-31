@@ -1,3 +1,6 @@
+import { readFileSync } from 'node:fs'
+import { fileURLToPath } from 'node:url'
+import { dirname, join } from 'node:path'
 /**
  * Reverse proxy from the orchestrator to a running per-user DSH.
  *
@@ -187,6 +190,20 @@ function proxyHttp(
   attempt(false)
 }
 
+
+const launchingHtmlPath = join(dirname(fileURLToPath(import.meta.url)), '../../web/launching.html')
+let cachedLaunchingHtml = ''
+function getLaunchingHtml(): string {
+  if (!cachedLaunchingHtml) {
+    try {
+      cachedLaunchingHtml = readFileSync(launchingHtmlPath, 'utf8')
+    } catch {
+      cachedLaunchingHtml = '<html><body><h1>Iniciando CopyMonster...</h1><script>setTimeout(() => location.reload(), 2000)</script></body></html>'
+    }
+  }
+  return cachedLaunchingHtml
+}
+
 export async function registerDshProxy(app: FastifyInstance): Promise<void> {
   // Legacy authenticated subpath proxy.
   app.all('/u/:slug/dsh/*', { preHandler: requireAuth }, async (request, reply) => {
@@ -211,6 +228,18 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     const access = await resolveSubdomainAccess(app, clientHost(request.headers), request.headers.cookie)
     if (access === null) return
     if ('error' in access) {
+      if (access.error === 'not_running' && request.method === 'GET' && ((request.headers.accept ?? '').includes('text/html') || request.raw.url === '/' || request.raw.url === '')) {
+        const slug = parseSubdomain(clientHost(request.headers), app.config.baseDomain)
+        if (slug) {
+          const user = await app.db.findUserBySlug(slug)
+          if (user) {
+            const folderAbs = app.userFs.resolvePath(user.id, 'workspace')
+            void app.supervisor.launch(user.id, folderAbs).catch(() => {})
+            reply.type('text/html; charset=utf-8').send(getLaunchingHtml())
+            return
+          }
+        }
+      }
       reply.code(access.code).send({ error: access.error })
       return
     }
@@ -227,6 +256,9 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
         return
       }
       const upstream = connect({ host: access.endpoint.host, port: access.endpoint.port })
+      const token = parseCookie(req.headers.cookie, 'sid')
+      const sess = token ? await app.db.findSessionWithUser(hashSessionToken(token)) : undefined
+      if (sess && app.supervisor.registerWebSocket) app.supervisor.registerWebSocket(sess.user.id, upstream)
       upstream.on('connect', () => {
         const lines = [`${req.method} ${req.url} HTTP/${req.httpVersion}`]
         for (let i = 0; i < req.rawHeaders.length; i += 2) {

@@ -1,0 +1,20 @@
+[Unit]
+Description=CopyMonster DSH Multi-Tenant Isolation Orchestrator
+After=network.target network-online.target copymonster.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/opt/copymonster-dsh-server-login
+EnvironmentFile=/etc/copymonster-dsh/orchestrator.env
+ExecStart=/usr/bin/node /opt/copymonster-dsh-server-login/lib/index.js
+Restart=always
+RestartSec=5
+LimitNOFILE=65536
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dsh-orchestrator
+
+[Install]
+WantedBy=multi-user.target

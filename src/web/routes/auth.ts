@@ -5,7 +5,7 @@
  */
 
 import type { FastifyPluginAsync } from 'fastify'
-import { randomUUID } from 'node:crypto'
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto'
 import { requireAuth } from '../middleware/authn.js'
 import { homeRoot, userRoot } from '../../fs/workspace.js'
 import { deriveKey, encrypt } from '../../crypto.js'
@@ -49,7 +49,101 @@ interface Credentials {
   password: string
 }
 
+
+const sessionTokenSchema = {
+  body: {
+    type: 'object',
+    required: ['supabaseJwt', 'username'],
+    additionalProperties: false,
+    properties: {
+      supabaseJwt: { type: 'string', minLength: 10, maxLength: 4096 },
+      username: { type: 'string', minLength: 3, maxLength: 32, pattern: '^[a-zA-Z0-9_-]+$' },
+    },
+  },
+} as const
+
+function parseAndValidateSupabaseJwt(token: string, secret?: string): { sub: string; email?: string } | null {
+  const parts = token.split('.')
+  if (parts.length !== 3) return null
+  const [headerB64, payloadB64, signatureB64] = parts
+  if (!headerB64 || !payloadB64 || !signatureB64) return null
+
+  if (secret && secret.trim() !== '') {
+    const expectedSig = createHmac('sha256', secret)
+      .update(`${headerB64}.${payloadB64}`)
+      .digest('base64url')
+    const sigBuf = Buffer.from(signatureB64)
+    const expBuf = Buffer.from(expectedSig)
+    if (sigBuf.length !== expBuf.length || !timingSafeEqual(sigBuf, expBuf)) {
+      return null
+    }
+  }
+
+  try {
+    const payloadStr = Buffer.from(payloadB64, 'base64url').toString('utf8')
+    const payload = JSON.parse(payloadStr)
+    if (!payload || typeof payload !== 'object') return null
+    if (typeof payload.sub !== 'string') return null
+    if (typeof payload.exp === 'number' && payload.exp * 1000 < Date.now()) {
+      return null
+    }
+    return { sub: payload.sub, email: payload.email }
+  } catch {
+    return null
+  }
+}
+
 export const authRoutes: FastifyPluginAsync = async (app) => {
+  app.post(
+    '/api/auth/session-token',
+    { schema: sessionTokenSchema, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
+    async (request, reply) => {
+      const { supabaseJwt, username } = request.body as { supabaseJwt: string; username: string }
+      const supabaseSecret = process.env.SUPABASE_JWT_SECRET ?? ''
+      const jwtClaims = parseAndValidateSupabaseJwt(supabaseJwt, supabaseSecret)
+      if (jwtClaims === null) {
+        return reply.code(401).send({ error: 'invalid_supabase_jwt' })
+      }
+
+      let user = await app.db.findUserByUsername(username)
+      if (user === undefined) {
+        const id = jwtClaims.sub || randomUUID()
+        const homeDir = homeRoot(userRoot(app.config.dataRoot, id))
+        user = await app.db.createUser({
+          id,
+          username,
+          passHash: 'supabase_sso_managed',
+          role: 'active',
+          homeDir,
+        })
+        await app.userFs.initUserRoot(id, user.uid ?? undefined)
+        await app.db.audit(id, 'sso_provision', JSON.stringify({ username, email: jwtClaims.email }))
+      }
+
+      if (user.role === 'disabled') {
+        return reply.code(403).send({ error: 'disabled' })
+      }
+
+      const token = newSessionToken()
+      await app.db.createSession({
+        tokenHash: hashSessionToken(token),
+        userId: user.id,
+        expiresAt: Date.now() + app.config.sessionTtlSeconds * 1000,
+        ip: request.ip,
+        userAgent: request.headers['user-agent'],
+      })
+      await app.db.audit(user.id, 'sso_login', null)
+
+      reply.header(
+        'set-cookie',
+        sessionCookie(token, app.config.sessionTtlSeconds, app.config.secureCookies, app.config.cookieDomain),
+      )
+
+      const subUrl = app.config.baseDomain !== '' ? `https://${username.toLowerCase()}.${app.config.baseDomain}/` : `/u/${user.id}/dsh/`
+      return { ok: true, user: toPublicUser(user), redirectUrl: subUrl }
+    },
+  )
+
   app.post(
     '/api/auth/register',
     { schema: registerSchema, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
