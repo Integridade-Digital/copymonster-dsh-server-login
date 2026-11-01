@@ -217,26 +217,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     },
   )
 
-  app.post(
-    '/api/auth/register',
-    { schema: registerSchema, config: { rateLimit: { max: 5, timeWindow: '1 minute' } } },
-    async (request, reply) => {
-      const { username, password } = request.body as Credentials
-      if ((await app.db.findUserByUsername(username)) !== undefined) {
-        return reply.code(409).send({ error: 'username_taken' })
-      }
-      const id = randomUUID()
-      const homeDir = homeRoot(userRoot(app.config.dataRoot, id))
-      const passHash = await hashPassword(password)
-      // Create the user first so `initUserRoot` resolves the DB-assigned uid
-      // (baseUid + row_id) instead of the hash fallback — the per-user Pods and
-      // the DSH Pod must run as the *same* uid or the DSH cannot write its dirs.
-      const user = await app.db.createUser({ id, username, passHash, role: 'active', homeDir })
-      await app.userFs.initUserRoot(id, user.uid ?? undefined)
-      await app.db.audit(id, 'register', JSON.stringify({ username }))
-      return reply.code(201).send({ user: { id, username, role: 'active' } })
-    },
-  )
+  // Canonical user registration is hosted on the primary application.
+  app.get('/register', async (_request, reply) => {
+    return reply.redirect('https://app.copymonster.co/register', 302)
+  })
+
+  app.get('/register.html', async (_request, reply) => {
+    return reply.redirect('https://app.copymonster.co/register', 302)
+  })
+
+  app.all('/api/auth/register', async (_request, reply) => {
+    return reply.redirect('https://app.copymonster.co/register', 302)
+  })
 
   app.post(
     '/api/auth/login',

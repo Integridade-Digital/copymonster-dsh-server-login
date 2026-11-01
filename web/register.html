@@ -1,57 +1,11 @@
-<!doctype html>
+<!DOCTYPE html>
 <html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Register — CopyMonster</title>
-    <link rel="icon" href="/logo.svg" />
-    <link rel="stylesheet" href="/design.css" />
-  </head>
-  <body class="auth-bg">
-    <div class="auth-card">
-      <div class="auth-brand">
-        <img class="logo" src="/logo.svg" alt="CopyMonster" />
-        <span class="wordmark">CopyMonster</span>
-      </div>
-      <p class="auth-sub">Create your CopyMonster account</p>
-
-      <form id="register">
-        <div class="field">
-          <label for="username">Username (3–32 chars: letters, numbers, _ or -)</label>
-          <input id="username" name="username" autocomplete="username" required />
-        </div>
-        <div class="field">
-          <label for="password">Password (min. 8 characters)</label>
-          <input id="password" name="password" type="password" autocomplete="new-password" required />
-        </div>
-        <button class="btn primary" type="submit">Register</button>
-        <p class="msg" id="msg"></p>
-      </form>
-
-      <p class="auth-alt">Already have an account? <a href="/login.html">Login</a></p>
-    </div>
-
-    <script>
-      const form = document.getElementById('register')
-      const msg = document.getElementById('msg')
-      form.addEventListener('submit', async (event) => {
-        event.preventDefault()
-        msg.textContent = ''
-        msg.className = 'msg err'
-        const res = await fetch('/api/auth/register', {
-          method: 'POST',
-          headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ username: form.username.value, password: form.password.value }),
-        })
-        const body = await res.json().catch(() => ({}))
-        if (!res.ok) {
-          msg.textContent = body.error === 'username_taken' ? 'Username already exists' : body.message || 'Registration failed'
-          return
-        }
-        msg.className = 'msg ok'
-        msg.textContent = 'Registration successful! Please check your email to verify your account.'
-        form.reset()
-      })
-    </script>
-  </body>
+<head>
+  <meta charset="UTF-8" />
+  <meta http-equiv="refresh" content="0; url=https://app.copymonster.co/register" />
+  <title>Redirecting to Registration...</title>
+</head>
+<body style="background:#0b0d12;color:#d8b24a;font-family:sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+  <p>Redirecting to <a href="https://app.copymonster.co/register" style="color:#f2c94c;">CopyMonster Registration</a>...</p>
+</body>
 </html>
