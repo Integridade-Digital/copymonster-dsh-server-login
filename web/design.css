@@ -26,15 +26,18 @@ body {
 }
 
 /* ---------- auth pages ---------- */
+body.auth-bg,
 .auth-bg {
   min-height: 100vh;
   display: grid;
   place-items: center;
   padding: 24px;
-  background:
-    radial-gradient(60rem 40rem at 80% -10%, rgba(216, 174, 95, 0.18), transparent 60%),
-    radial-gradient(50rem 36rem at 10% 110%, rgba(150, 125, 69, 0.28), transparent 60%),
-    linear-gradient(160deg, #f4f2ec, #faf9f5);
+  background-color: #0b0d12;
+  background-image: url('/auth-image.jpg');
+  background-size: cover;
+  background-position: center;
+  background-repeat: no-repeat;
+  background-attachment: fixed;
 }
 .auth-card {
   width: 100%;
@@ -44,13 +47,25 @@ body {
   padding: 32px 30px 26px;
   box-shadow: var(--shadow);
 }
-.auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 4px; }
+.auth-brand {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  margin-bottom: 8px;
+}
+.auth-brand .auth-logo {
+  max-width: 220px;
+  width: 100%;
+  height: auto;
+  display: block;
+}
 .auth-brand .logo { width: 34px; height: 34px; border-radius: 9px; }
 .auth-brand h1 { font-size: 19px; margin: 0; letter-spacing: 0.2px; }
 .wordmark { display: inline-flex; align-items: center; font-weight: 700; font-size: 1.2rem; }
 .auth-brand .wordmark { height: 22px; color: var(--accent); }
 .topbar .wordmark { height: 20px; color: var(--accent); }
-.auth-sub { color: var(--ink-soft); font-size: 13px; margin: 6px 0 22px; }
+.auth-sub { color: var(--ink-soft); font-size: 13px; margin: 6px 0 22px; text-align: center; }
 .field { margin-bottom: 14px; }
 .field label { display: block; font-size: 13px; color: var(--ink-soft); margin-bottom: 6px; }
 .field input {
