@@ -252,7 +252,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
       await issueSession(app, request, reply, user)
       await app.db.audit(user.id, 'login', null)
-      return { user: toPublicUser(user) }
+      const subUrl =
+        app.config.baseDomain !== ''
+          ? `https://${user.username.toLowerCase()}.${app.config.baseDomain}/`
+          : `/u/${user.id}/dsh/`
+      return { user: toPublicUser(user), redirectUrl: subUrl }
     },
   )
 
