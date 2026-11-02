@@ -29,6 +29,7 @@ export interface RuntimeEnv {
   role: 'main' | 'watchdog'
   port?: number
   handoffPath?: string
+  baseDomain?: string
 }
 
 /** Parse the env contract set by the orchestrator. */
@@ -36,10 +37,12 @@ export function readRuntimeEnv(env: NodeJS.ProcessEnv = process.env): RuntimeEnv
   const role = env.DSH_SERVER_LOGIN_ROLE === 'watchdog' ? 'watchdog' : 'main'
   const port = Number(env.DSH_SERVER_LOGIN_PORT ?? '')
   const handoffPath = env.DSH_SERVER_LOGIN_HANDOFF_PATH
+  const baseDomain = env.DSH_SERVER_LOGIN_BASE_DOMAIN?.trim().toLowerCase().replace(/^\.+|\.+$/g, '')
   return {
     role,
     ...(Number.isFinite(port) && port > 0 ? { port } : {}),
     ...(handoffPath !== undefined && handoffPath !== '' ? { handoffPath } : {}),
+    ...(baseDomain !== undefined && baseDomain !== '' ? { baseDomain } : {}),
   }
 }
 
@@ -71,7 +74,89 @@ export function watchdogSection(runtime: RuntimeEnv): PromptSection {
  * watchdog-contract system-prompt section.
  * @param ctx - the Cordis context.
  */
-export function apply(ctx: { systemPrompt?: { section(section: PromptSection): () => void }; on?: (event: string, fn: () => void) => void }): void {
+interface EnterRequest {
+  method?: string
+  headers: Record<string, string | string[] | undefined>
+}
+
+interface EnterResponse {
+  writeHead(status: number, headers?: Record<string, string>): unknown
+  end(body?: string): unknown
+}
+
+interface RuntimeWebServer {
+  register(route: {
+    kind: 'exact'
+    path: '/enter'
+    handler(request: EnterRequest, response: EnterResponse): void
+  }): () => void
+}
+
+interface RuntimeConnection {
+  authenticatedUrl(baseUrl: string): string
+}
+
+interface RuntimePluginContext {
+  systemPrompt?: { section(section: PromptSection): () => void }
+  on?: (event: string, fn: () => void) => void
+  inject?: (services: string[], callback: (ctx: RuntimePluginContext & {
+    webServer: RuntimeWebServer
+    connection: RuntimeConnection
+    effect: (effect: () => () => void, name?: string) => void
+  }) => void) => unknown
+  webServer?: RuntimeWebServer
+  connection?: RuntimeConnection
+  effect?: (effect: () => () => void, name?: string) => void
+}
+
+function firstHeader(value: string | string[] | undefined): string | undefined {
+  return Array.isArray(value) ? value[0] : value
+}
+
+function registerEnterRoute(ctx: RuntimePluginContext, baseDomain: string): void {
+  const register = (): (() => void) => ctx.webServer!.register({
+    kind: 'exact',
+    path: '/enter',
+    handler: (request, response) => {
+      if (request.method !== 'GET' && request.method !== 'HEAD') {
+        response.writeHead(405, { 'allow': 'GET, HEAD', 'cache-control': 'no-store' })
+        response.end()
+        return
+      }
+      const host = firstHeader(request.headers['x-forwarded-host'])
+      const proto = firstHeader(request.headers['x-forwarded-proto'])
+      const expectedSuffix = `.${baseDomain}`
+      const hostname = host?.toLowerCase()
+      const slug = hostname?.endsWith(expectedSuffix) ? hostname.slice(0, -expectedSuffix.length) : ''
+      if (host === undefined || proto !== 'https' || hostname !== host || !/^[a-z0-9][a-z0-9-]{2,28}[a-z0-9]$/.test(slug)) {
+        response.writeHead(400, { 'cache-control': 'no-store' })
+        response.end()
+        return
+      }
+      const location = ctx.connection!.authenticatedUrl(`https://${host}/`)
+      response.writeHead(303, {
+        'cache-control': 'no-store',
+        'location': location,
+        'referrer-policy': 'no-referrer',
+      })
+      response.end()
+    },
+  })
+
+  if (ctx.effect !== undefined) {
+    ctx.effect(register, 'dsh-server-login-runtime: /enter')
+  } else {
+    const dispose = register()
+    ctx.on?.('dispose', dispose)
+  }
+}
+
+/**
+ * Cordis entry. Registers the watchdog contract and the per-tenant browser
+ * bootstrap route. The route uses the process's own one-time launch token, so
+ * no Supabase service-role secret or auth-http package is exposed to tenants.
+ */
+export function apply(ctx: RuntimePluginContext): void {
   const runtime = readRuntimeEnv()
   // eslint-disable-next-line no-console
   console.log(
@@ -80,5 +165,10 @@ export function apply(ctx: { systemPrompt?: { section(section: PromptSection): (
   if (runtime.role === 'main' && ctx.systemPrompt !== undefined) {
     const dispose = ctx.systemPrompt.section(watchdogSection(runtime))
     ctx.on?.('dispose', dispose)
+  }
+  if (runtime.role === 'main' && runtime.baseDomain !== undefined && ctx.inject !== undefined) {
+    ctx.inject(['webServer', 'connection'], injected => {
+      registerEnterRoute(injected, runtime.baseDomain!)
+    })
   }
 }

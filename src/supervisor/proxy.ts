@@ -17,6 +17,7 @@ import { Agent, request as httpRequest, type IncomingHttpHeaders, type IncomingM
 import { connect } from 'node:net'
 import { requireAuth, resolveSessionUser } from '../web/middleware/authn.js'
 import type { Endpoint } from './spawner.js'
+import { renderPatch } from './patch.js'
 
 // Keep-alive pool for per-user DSH upstreams. Replaced (not just destroyed) on a
 // connection error, because a Pod rebuild changes its IP and any pooled socket
@@ -38,7 +39,11 @@ const STRIP_HEADERS = new Set([
   'x-forwarded-proto',
 ])
 
-function buildUpstreamHeaders(headers: IncomingHttpHeaders, port: number): Record<string, string | string[]> {
+export function buildUpstreamHeaders(
+  headers: IncomingHttpHeaders,
+  port: number,
+  publicHost?: string,
+): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {}
   for (const [key, value] of Object.entries(headers)) {
     if (value === undefined || STRIP_HEADERS.has(key.toLowerCase())) continue
@@ -48,6 +53,12 @@ function buildUpstreamHeaders(headers: IncomingHttpHeaders, port: number): Recor
   // or a `--trusted-host` authority — a real domain would 403 every /api call.
   // DSH's absolute URLs are rewritten to the real origin in proxyHttp below.
   out.host = `127.0.0.1:${port}`
+  if (publicHost !== undefined) {
+    // Never reflect client-supplied forwarding headers. `publicHost` is built
+    // from the authenticated user's canonical slug and configured base domain.
+    out['x-forwarded-host'] = publicHost
+    out['x-forwarded-proto'] = 'https'
+  }
   return out
 }
 
@@ -79,7 +90,7 @@ function realOrigin(headers: IncomingHttpHeaders): string | undefined {
 }
 
 /** A subdomain resolution: a tunnelable endpoint, an error to return, or null (not a subdomain). */
-type SubdomainAccess = { endpoint: Endpoint; userId: string } | { error: string; code: number } | null
+type SubdomainAccess = { endpoint: Endpoint; userId: string; publicHost: string } | { error: string; code: number } | null
 
 /**
  * The client-facing host, preferring `X-Forwarded-Host`. The control plane sits
@@ -117,7 +128,7 @@ async function resolveSubdomainAccess(
   }
   const endpoint = await app.supervisor.endpointFor(user.id)
   if (endpoint === undefined) return { error: 'not_running', code: 404 }
-  return { endpoint, userId: user.id }
+  return { endpoint, userId: user.id, publicHost: `${slug}.${app.config.baseDomain}` }
 }
 
 function proxyHttp(
@@ -127,6 +138,7 @@ function proxyHttp(
   targetPath: string,
   rewritePrefix?: string,
   rewriteLoopbackLocation = false,
+  publicHost?: string,
 ): void {
   reply.hijack()
   const attempt = (retry: boolean): void => {
@@ -142,7 +154,7 @@ function proxyHttp(
         agent: retry ? false : upstreamAgent,
         // Host header stays loopback for the DSH trust fence; the TCP target host
         // is endpoint.host above. k8s mode overrides the header port separately.
-        headers: buildUpstreamHeaders(request.headers, endpoint.port),
+        headers: buildUpstreamHeaders(request.headers, endpoint.port, publicHost),
       },
       (upRes: IncomingMessage) => {
         const headers = { ...upRes.headers }
@@ -232,7 +244,11 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
           const user = await app.db.findUserBySlug(slug)
           if (user) {
             const folderAbs = app.userFs.resolvePath(user.id, 'workspace')
-            void app.supervisor.launch(user.id, folderAbs).catch(() => {})
+            void app.supervisor.launch(
+              user.id,
+              folderAbs,
+              app.config.enablePatch ? renderPatch([]) : undefined,
+            ).catch(() => {})
             reply.type('text/html; charset=utf-8').send(getLaunchingHtml())
             return
           }
@@ -241,7 +257,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
       reply.code(access.code).send({ error: access.error })
       return
     }
-    proxyHttp(request, reply, access.endpoint, request.raw.url ?? '/', undefined, app.config.deployMode === 'local')
+    proxyHttp(request, reply, access.endpoint, request.raw.url ?? '/', undefined, app.config.deployMode === 'local', access.publicHost)
   })
 
   // Per-user subdomain: WebSocket upgrade tunnel. Auth is async (DB lookup), so
@@ -263,6 +279,8 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
           lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`)
         }
         lines.push(`Host: 127.0.0.1:${access.endpoint.port}`)
+        lines.push(`X-Forwarded-Host: ${access.publicHost}`)
+        lines.push('X-Forwarded-Proto: https')
         upstream.write(lines.join('\r\n') + '\r\n\r\n')
         if (head !== undefined && head.length > 0) upstream.write(head)
         socket.pipe(upstream)

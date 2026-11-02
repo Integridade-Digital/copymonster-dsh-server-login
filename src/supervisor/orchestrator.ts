@@ -225,6 +225,7 @@ export class LocalSpawner implements Spawner {
     const env: Record<string, string> = {
       ...(await this.baseEnv(userId)),
       DSH_SERVER_LOGIN_ROLE: role,
+      DSH_SERVER_LOGIN_BASE_DOMAIN: this.config.baseDomain,
       DSH_SERVER_LOGIN_HANDOFF_PATH: this.handoffPath(userId), // both roles: main writes, watchdog reads
     }
     if (isMain) {
