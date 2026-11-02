@@ -235,6 +235,9 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
 
   // Per-user subdomain: HTTP (intercept before normal routing).
   app.addHook('onRequest', async (request, reply) => {
+    // The SSO exchange is an orchestrator route, not tenant traffic: a caller
+    // without a session cookie must reach it before the proxy's auth check.
+    if ((request.raw.url ?? '').split('?')[0] === '/api/auth/session-token') return
     const access = await resolveSubdomainAccess(app, clientHost(request.headers), request.headers.cookie)
     if (access === null) return
     if ('error' in access) {

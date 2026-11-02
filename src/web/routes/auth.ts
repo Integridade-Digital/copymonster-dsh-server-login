@@ -154,6 +154,29 @@ async function issueSession(
 }
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
+  // The browser login page runs on the main app origin and calls this route on
+  // the tenant subdomain. Both are same-site (one registrable domain), so the
+  // session cookie travels, but the browser still requires CORS for the fetch.
+  app.addHook('onRequest', async (request, reply) => {
+    if ((request.raw.url ?? '').split('?')[0] !== '/api/auth/session-token') return
+    const origin = request.headers.origin
+    const allowedOrigins = [
+      app.config.mainAppUrl,
+      `https://app.${app.config.baseDomain}`,
+      'https://app.copymonster.co',
+    ].filter(Boolean)
+    if (!origin || !allowedOrigins.includes(origin)) return
+    reply.header('access-control-allow-origin', origin)
+    reply.header('access-control-allow-credentials', 'true')
+    reply.header('access-control-allow-headers', 'content-type, authorization')
+    reply.header('access-control-allow-methods', 'POST, OPTIONS')
+    reply.header('vary', 'origin')
+  })
+
+  app.options('/api/auth/session-token', async (_request, reply) => {
+    return reply.code(204).send()
+  })
+
   app.post(
     '/api/auth/session-token',
     { schema: sessionTokenSchema, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
