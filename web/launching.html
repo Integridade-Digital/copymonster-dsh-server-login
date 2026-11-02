@@ -3,18 +3,37 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Iniciando Ambiente Seguro — CopyMonster</title>
+  <title>Preparando seu ambiente — CopyMonster</title>
+  <link rel="icon" href="/logo.svg" />
   <style>
     :root {
-      --bg: #0A0A0C;
-      --card-bg: rgba(18, 18, 24, 0.75);
-      --card-border: rgba(212, 175, 55, 0.25);
-      --gold-primary: #D4AF37;
-      --gold-light: #F2D06B;
-      --gold-dark: #997D26;
-      --text: #F4F4F6;
-      --text-muted: #8E8E9A;
+      --bg: #262624;
+      --card-bg: #30302e;
+      --card-border: #3a3a37;
+      --card-border-highlight: #967d45;
+      --primary: #967d45;
+      --primary-light: #d0a56b;
+      --text: #faf9f5;
+      --text-muted: #b7b5a9;
       --success: #10B981;
+      --steps-bg: #262624;
+      --steps-border: #3a3a37;
+    }
+
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg: #faf9f5;
+        --card-bg: #ffffff;
+        --card-border: #dad9d4;
+        --card-border-highlight: #967d45;
+        --primary: #967d45;
+        --primary-light: #d0a56b;
+        --text: #1c1b18;
+        --text-muted: #73726c;
+        --success: #10B981;
+        --steps-bg: #f5f4ef;
+        --steps-border: #dad9d4;
+      }
     }
 
     * {
@@ -26,9 +45,9 @@
 
     body {
       background-color: var(--bg);
-      background-image: 
-        radial-gradient(circle at 50% 15%, rgba(212, 175, 55, 0.08) 0%, transparent 60%),
-        radial-gradient(circle at 80% 85%, rgba(212, 175, 55, 0.04) 0%, transparent 50%);
+      background-image:
+        radial-gradient(circle at 50% 15%, rgba(150, 125, 69, 0.12) 0%, transparent 60%),
+        radial-gradient(circle at 80% 85%, rgba(150, 125, 69, 0.06) 0%, transparent 50%);
       color: var(--text);
       min-height: 100vh;
       display: flex;
@@ -44,8 +63,7 @@
       border: 1px solid var(--card-border);
       border-radius: 16px;
       padding: 40px 32px;
-      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6), 0 0 80px rgba(212, 175, 55, 0.05);
-      backdrop-filter: blur(12px);
+      box-shadow: 0 16px 36px rgba(0, 0, 0, 0.35), 0 0 0 1px rgba(150, 125, 69, 0.18);
       text-align: center;
       animation: fadeIn 0.6s cubic-bezier(0.16, 1, 0.3, 1);
     }
@@ -55,23 +73,18 @@
       to { opacity: 1; transform: translateY(0); }
     }
 
-    .brand-logo {
-      display: inline-flex;
-      align-items: center;
-      justify-content: center;
-      width: 64px;
-      height: 64px;
-      border-radius: 14px;
-      background: linear-gradient(135deg, rgba(242, 208, 107, 0.15), rgba(153, 125, 38, 0.05));
-      border: 1px solid var(--card-border);
-      margin-bottom: 24px;
-      box-shadow: 0 0 24px rgba(212, 175, 55, 0.15);
+    .launch-logo {
+      max-width: 160px;
+      height: auto;
+      display: block;
+      margin: 0 auto 24px;
+      filter: brightness(0) invert(1);
     }
 
-    .brand-logo svg {
-      width: 32px;
-      height: 32px;
-      fill: var(--gold-light);
+    @media (prefers-color-scheme: light) {
+      .launch-logo {
+        filter: none;
+      }
     }
 
     h1 {
@@ -79,9 +92,7 @@
       font-weight: 600;
       letter-spacing: -0.02em;
       margin-bottom: 8px;
-      background: linear-gradient(135deg, #FFFFFF 40%, var(--gold-light) 100%);
-      -webkit-background-clip: text;
-      -webkit-text-fill-color: transparent;
+      color: var(--text);
     }
 
     p.subtitle {
@@ -100,8 +111,8 @@
     .spinner {
       width: 44px;
       height: 44px;
-      border: 3px solid rgba(212, 175, 55, 0.15);
-      border-top-color: var(--gold-primary);
+      border: 3px solid rgba(150, 125, 69, 0.2);
+      border-top-color: var(--primary);
       border-radius: 50%;
       animation: spin 0.9s linear infinite;
     }
@@ -115,8 +126,8 @@
       flex-direction: column;
       gap: 12px;
       text-align: left;
-      background: rgba(10, 10, 12, 0.6);
-      border: 1px solid rgba(255, 255, 255, 0.05);
+      background: var(--steps-bg);
+      border: 1px solid var(--steps-border);
       border-radius: 12px;
       padding: 16px;
       margin-top: 16px;
@@ -150,11 +161,11 @@
     .step-item.done .step-icon {
       border-color: var(--success);
       background: var(--success);
-      color: #000;
+      color: #ffffff;
     }
 
     .step-item.active .step-icon {
-      border-color: var(--gold-primary);
+      border-color: var(--primary);
       border-top-color: transparent;
       animation: spin 1s linear infinite;
     }
@@ -163,20 +174,16 @@
       font-size: 11px;
       color: var(--text-muted);
       margin-top: 24px;
-      opacity: 0.7;
+      opacity: 0.8;
     }
   </style>
 </head>
 <body>
   <div class="container">
-    <div class="brand-logo">
-      <svg viewBox="0 0 24 24">
-        <path d="M12 2L2 7l10 5 10-5-10-5zM2 17l10 5 10-5M2 12l10 5 10-5"/>
-      </svg>
-    </div>
+    <img src="/logo.svg" alt="CopyMonster" class="launch-logo" />
 
-    <h1>Iniciando seu ambiente seguro CopyMonster...</h1>
-    <p class="subtitle">Preparando seu workspace Linux isolado e carregando seu motor Brand DNA.</p>
+    <h1>Preparando seu ambiente CopyMonster...</h1>
+    <p class="subtitle">Configurando seu workspace isolado e carregando o motor de Brand DNA.</p>
 
     <div class="spinner-wrap">
       <div class="spinner"></div>
@@ -185,19 +192,19 @@
     <div class="steps">
       <div class="step-item done" id="step-1">
         <div class="step-icon">✓</div>
-        <span>Sessão Supabase SSO autenticada</span>
+        <span>Sessão segura autenticada</span>
       </div>
       <div class="step-item active" id="step-2">
         <div class="step-icon"></div>
-        <span>Alocando sandbox Linux e portas seguras...</span>
+        <span>Alocando workspace dedicado e portas seguras...</span>
       </div>
       <div class="step-item" id="step-3">
         <div class="step-icon"></div>
-        <span>Carregando motor CopyMonster e plugins...</span>
+        <span>Carregando o motor CopyMonster e seus plugins...</span>
       </div>
     </div>
 
-    <p class="footer-note">Hard Isolation Ativo • UID Dedicado • CopyMonster SaaS</p>
+    <p class="footer-note">Isolamento total ativo • Ambiente dedicado • CopyMonster SaaS</p>
   </div>
 
   <script>
@@ -215,7 +222,7 @@
             document.getElementById('step-2').querySelector('.step-icon').textContent = '✓';
             document.getElementById('step-3').className = 'step-item done';
             document.getElementById('step-3').querySelector('.step-icon').textContent = '✓';
-            
+
             // Redirect or reload into the active DSH session
             setTimeout(() => {
               window.location.reload();
