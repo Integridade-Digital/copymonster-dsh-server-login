@@ -8,7 +8,8 @@
  * @module dsh-server-login/fs/workspace
  */
 
-import { mkdirSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
+import { chmodSync, existsSync, mkdirSync } from 'node:fs'
 import { lstat, readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { PathEscapeError } from '../web/middleware/fs-guard.js'
@@ -44,6 +45,27 @@ export function handoffPath(root: string): string {
 /** Create a directory (0700) if it does not exist. */
 export function ensureDir(path: string): void {
   mkdirSync(path, { recursive: true, mode: 0o700 })
+}
+
+/** Files under a user root whose contents must stay readable only by the tenant. */
+const OWNER_ONLY_FILES = ['.credentials.yaml']
+
+/**
+ * Hand a user root to the tenant's own uid. The recursive pass makes the tree
+ * traversable and writable by that uid, so it widens group/other bits too;
+ * owner-only files are restored afterwards.
+ * @param root - the user root directory.
+ * @param uid - the tenant's Linux uid (also used as gid).
+ */
+export function grantUserRootPermissions(root: string, uid: number): void {
+  execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
+  execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
+  for (const name of OWNER_ONLY_FILES) {
+    const target = join(homeRoot(root), name)
+    try {
+      if (existsSync(target)) chmodSync(target, 0o600)
+    } catch {}
+  }
 }
 
 /**

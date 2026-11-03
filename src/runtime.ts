@@ -69,92 +69,17 @@ export function watchdogSection(runtime: RuntimeEnv): PromptSection {
   }
 }
 
-/**
- * Cordis entry. Logs the resolved env, and on the main role registers the
- * watchdog-contract system-prompt section.
- * @param ctx - the Cordis context.
- */
-interface EnterRequest {
-  method?: string
-  headers: Record<string, string | string[] | undefined>
-}
-
-interface EnterResponse {
-  writeHead(status: number, headers?: Record<string, string>): unknown
-  end(body?: string): unknown
-}
-
-interface RuntimeWebServer {
-  register(route: {
-    kind: 'exact'
-    path: '/enter'
-    handler(request: EnterRequest, response: EnterResponse): void
-  }): () => void
-}
-
-interface RuntimeConnection {
-  authenticatedUrl(baseUrl: string): string
-}
-
+/** The subset of the Cordis context this plugin touches. */
 interface RuntimePluginContext {
+  get?: <T>(name: string) => T | undefined
   systemPrompt?: { section(section: PromptSection): () => void }
   on?: (event: string, fn: () => void) => void
-  inject?: (services: string[], callback: (ctx: RuntimePluginContext & {
-    webServer: RuntimeWebServer
-    connection: RuntimeConnection
-    effect: (effect: () => () => void, name?: string) => void
-  }) => void) => unknown
-  webServer?: RuntimeWebServer
-  connection?: RuntimeConnection
-  effect?: (effect: () => () => void, name?: string) => void
-}
-
-function firstHeader(value: string | string[] | undefined): string | undefined {
-  return Array.isArray(value) ? value[0] : value
-}
-
-function registerEnterRoute(ctx: RuntimePluginContext, baseDomain: string): void {
-  const register = (): (() => void) => ctx.webServer!.register({
-    kind: 'exact',
-    path: '/enter',
-    handler: (request, response) => {
-      if (request.method !== 'GET' && request.method !== 'HEAD') {
-        response.writeHead(405, { 'allow': 'GET, HEAD', 'cache-control': 'no-store' })
-        response.end()
-        return
-      }
-      const host = firstHeader(request.headers['x-forwarded-host'])
-      const proto = firstHeader(request.headers['x-forwarded-proto'])
-      const expectedSuffix = `.${baseDomain}`
-      const hostname = host?.toLowerCase()
-      const slug = hostname?.endsWith(expectedSuffix) ? hostname.slice(0, -expectedSuffix.length) : ''
-      if (host === undefined || proto !== 'https' || hostname !== host || !/^[a-z0-9][a-z0-9-]{2,28}[a-z0-9]$/.test(slug)) {
-        response.writeHead(400, { 'cache-control': 'no-store' })
-        response.end()
-        return
-      }
-      const location = ctx.connection!.authenticatedUrl(`https://${host}/`)
-      response.writeHead(303, {
-        'cache-control': 'no-store',
-        'location': location,
-        'referrer-policy': 'no-referrer',
-      })
-      response.end()
-    },
-  })
-
-  if (ctx.effect !== undefined) {
-    ctx.effect(register, 'dsh-server-login-runtime: /enter')
-  } else {
-    const dispose = register()
-    ctx.on?.('dispose', dispose)
-  }
 }
 
 /**
- * Cordis entry. Registers the watchdog contract and the per-tenant browser
- * bootstrap route. The route uses the process's own one-time launch token, so
- * no Supabase service-role secret or auth-http package is exposed to tenants.
+ * Cordis entry. Registers the watchdog contract. The per-tenant browser
+ * bootstrap route (`/enter`) is owned by the CopyMonster auth-http bundle,
+ * which every launched web profile mounts.
  */
 export function apply(ctx: RuntimePluginContext): void {
   const runtime = readRuntimeEnv()
@@ -162,13 +87,11 @@ export function apply(ctx: RuntimePluginContext): void {
   console.log(
     `[dsh-server-login-runtime] role=${runtime.role} port=${runtime.port ?? ''} handoff=${runtime.handoffPath ?? ''}`,
   )
-  if (runtime.role === 'main' && ctx.systemPrompt !== undefined) {
-    const dispose = ctx.systemPrompt.section(watchdogSection(runtime))
+  // Cordis throws on reading a service the plugin did not declare in `inject`,
+  // so the optional system-prompt service is read through `get`.
+  const systemPrompt = ctx.get?.<{ section(section: PromptSection): () => void }>('systemPrompt')
+  if (runtime.role === 'main' && systemPrompt !== undefined) {
+    const dispose = systemPrompt.section(watchdogSection(runtime))
     ctx.on?.('dispose', dispose)
-  }
-  if (runtime.role === 'main' && runtime.baseDomain !== undefined && ctx.inject !== undefined) {
-    ctx.inject(['webServer', 'connection'], injected => {
-      registerEnterRoute(injected, runtime.baseDomain!)
-    })
   }
 }

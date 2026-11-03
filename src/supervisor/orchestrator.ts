@@ -16,7 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { chmodSync, chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
-import { handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
+import { grantUserRootPermissions, handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
 import { createPortGuard, type PortGuard } from './firewall.js'
 import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
 import {
@@ -321,8 +321,7 @@ export class LocalSpawner implements Spawner {
         chmodSync(this.config.dataRoot, 0o755)
         chmodSync(join(this.config.dataRoot, 'users'), 0o755)
         chmodSync(root, 0o755)
-        execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
-        execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
+        grantUserRootPermissions(root, uid)
       } catch {}
     }
     const prefix = this.config.spawnAsUserCommand.map((part) =>

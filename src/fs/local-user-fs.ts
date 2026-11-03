@@ -6,16 +6,26 @@
  * @module dsh-server-login/fs/local-user-fs
  */
 
-import { execFileSync } from 'node:child_process'
-import { chownSync, chmodSync, cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  chownSync,
+  chmodSync,
+  cpSync,
+  existsSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { homedir } from 'node:os'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { PathEscapeError, resolveWithinRoot, safeFilename } from '../web/middleware/fs-guard.js'
 import { listInstalledPlugins, type PluginInfo } from './plugins.js'
 import { UserFsError, type UserFs } from './user-fs.js'
-import { ensureDir, handoffPath, homeRoot, listDir, rejectSymlinkEscape, workspaceRoot, type FsEntry } from './workspace.js'
+import { ensureDir, grantUserRootPermissions, handoffPath, homeRoot, listDir, rejectSymlinkEscape, workspaceRoot, type FsEntry } from './workspace.js'
 
 /** Resolve a user id to that user's data root (`<dataRoot>/users/<id>`, or a
  * fixed directory when the sidecar serves exactly one user). */
@@ -49,6 +59,33 @@ function chownRecursiveSync(targetPath: string, uid: number, gid: number): void 
 
 const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
 const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
+
+/** This package's root, used to expose `dsh-server-login/runtime` to tenants. */
+const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url))
+
+/**
+ * Expose a package to a tenant profile by placing a link in the user root's
+ * `node_modules`, which Node walks up to from `<home>/profiles/<name>/`.
+ * @param root - the tenant root directory.
+ * @param name - the bare package name to link.
+ * @param target - the package directory the link points at.
+ */
+function linkPackageIntoUserRoot(root: string, name: string, target: string): void {
+  const modulesDir = join(root, 'node_modules')
+  ensureDir(modulesDir)
+  const link = join(modulesDir, name)
+  if (existsSync(link)) return
+  try {
+    symlinkSync(target, link, 'dir')
+  } catch {}
+}
+
+/** Restrict a file to its owner when the recursive permission pass widened it. */
+function restrictToOwner(targetPath: string): void {
+  try {
+    if (existsSync(targetPath)) chmodSync(targetPath, 0o600)
+  } catch {}
+}
 
 function ensureCopyMonsterBundle(packageJsonPath: string): void {
   try {
@@ -90,8 +127,26 @@ export class LocalUserFs implements UserFs {
     const userProfile = join(homeRoot(root), 'profiles', 'web')
 
     if (templateProfile && !existsSync(userProfile)) {
-      cpSync(templateProfile, userProfile, { recursive: true })
+      cpSync(templateProfile, userProfile, {
+        recursive: true,
+        filter: (src) => src !== join(templateProfile, 'node_modules'),
+      })
     }
+
+    // Share the template's installed dependencies rather than copying them: the
+    // profile's own links resolve against the template tree, and every tenant
+    // reads the same modules without a per-tenant install.
+    const templateModules = templateProfile === undefined ? undefined : join(templateProfile, 'node_modules')
+    const userModules = join(userProfile, 'node_modules')
+    if (templateModules !== undefined && existsSync(templateModules) && !existsSync(userModules)) {
+      try {
+        symlinkSync(realpathSync(templateModules), userModules, 'dir')
+      } catch {}
+    }
+
+    // The supervisor patch mounts `dsh-server-login/runtime` in every child, and
+    // Node resolves it by walking up from `<home>/profiles/<profile>/`.
+    linkPackageIntoUserRoot(root, 'dsh-server-login', PACKAGE_ROOT)
 
     // Always ensure the tenant's web profile includes the CopyMonster bundle
     const userPackageJson = join(userProfile, 'package.json')
@@ -102,13 +157,15 @@ export class LocalUserFs implements UserFs {
     // Recursively chown the entire tree so the tenant has full permission over all files.
     if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
       try {
-        execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
-        execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
+        grantUserRootPermissions(root, uid)
         chmodSync(root, 0o755)
         chmodSync(homeRoot(root), 0o755)
         chmodSync(workspaceRoot(root), 0o755)
       } catch {
         chownRecursiveSync(root, uid, uid)
+        // The recursive pass grants group/other read; credential stores must stay
+        // owner-only or the credentials plugin refuses to start.
+        restrictToOwner(join(homeRoot(root), '.credentials.yaml'))
       }
     }
   }
