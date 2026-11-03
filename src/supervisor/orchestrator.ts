@@ -11,6 +11,7 @@
  */
 
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
+import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { chownSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -56,8 +57,48 @@ export class LocalSpawner implements Spawner {
     private readonly resolveApiKey: (userId: string) => Promise<string | null>,
     /** Resolve the user's assigned Linux uid (falls back to hash when unset). */
     private readonly resolveUid: (userId: string) => Promise<number>,
+    /** Database adapter to look up usernames for Linux user provisioning. */
+    private readonly db: { findUserById(id: string): Promise<{ username: string } | undefined> },
   ) {
     this.portGuard = createPortGuard(config.portGuard)
+  }
+
+  /** Ensure the Linux user/group for the tenant's UID exists (idempotent). */
+  private async provisionLinuxUser(userId: string): Promise<void> {
+    const uid = await this.resolveUid(userId)
+    const user = await this.db.findUserById(userId)
+    const username = user?.username ?? `user-${uid}`
+
+    try {
+      execFileSync('id', ['-u', String(uid)], { stdio: 'ignore' })
+      return // already exists
+    } catch {
+      // user doesn't exist, create it
+    }
+
+    try {
+      execFileSync('groupadd', ['-g', String(uid), username], { stdio: 'ignore' })
+    } catch {
+      // group might already exist
+    }
+
+    try {
+      execFileSync('useradd', [
+        '-u', String(uid),
+        '-g', String(uid),
+        '-d', userRoot(this.config.dataRoot, userId),
+        '-M',
+        '-s', '/bin/bash',
+        username
+      ], { stdio: 'ignore' })
+    } catch (e) {
+      // race condition: another process created it
+      try {
+        execFileSync('id', ['-u', String(uid)], { stdio: 'ignore' })
+      } catch {
+        throw e
+      }
+    }
   }
 
   /** Spawn the resident main DSH for a user (watchdog is pulled up on demand). */
@@ -266,6 +307,8 @@ export class LocalSpawner implements Spawner {
       const resolvedCommand = resolveBinary(command, env.PATH)
       return spawn(resolvedCommand, args, resolvedOptions)
     }
+    // Ensure the Linux user exists before attempting setpriv
+    await this.provisionLinuxUser(userId)
     const uid = await this.resolveUid(userId)
     const prefix = this.config.spawnAsUserCommand.map((part) =>
       part.replaceAll('{UID}', String(uid)).replaceAll('{GID}', String(uid)),

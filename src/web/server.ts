@@ -64,7 +64,7 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   const supervisor: Spawner =
     config.deployMode === 'k8s'
       ? new K8sSpawner(config, db, resolveApiKey, resolveUid)
-      : new LocalSpawner(config, resolveApiKey, resolveUid)
+      : new LocalSpawner(config, resolveApiKey, resolveUid, db)
   const userFs = createUserFs(config, (userId) => supervisor.ensureFileService(userId))
 
   const app = Fastify({
