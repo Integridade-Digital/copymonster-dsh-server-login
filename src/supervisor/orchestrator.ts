@@ -315,15 +315,14 @@ export class LocalSpawner implements Spawner {
     // Ensure the Linux user exists before attempting setpriv
     await this.provisionLinuxUser(userId)
     const uid = await this.resolveUid(userId)
-    if (resolvedOptions.cwd && typeof process.getuid === 'function' && process.getuid() === 0) {
-      try {
-        chownSync(resolvedOptions.cwd, uid, uid)
-      } catch {}
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
       try {
         const root = userRoot(this.config.dataRoot, userId)
         chmodSync(this.config.dataRoot, 0o755)
         chmodSync(join(this.config.dataRoot, 'users'), 0o755)
         chmodSync(root, 0o755)
+        execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
+        execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
       } catch {}
     }
     const prefix = this.config.spawnAsUserCommand.map((part) =>

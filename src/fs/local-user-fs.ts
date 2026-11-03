@@ -6,6 +6,7 @@
  * @module dsh-server-login/fs/local-user-fs
  */
 
+import { execFileSync } from 'node:child_process'
 import { chownSync, chmodSync, cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -100,15 +101,15 @@ export class LocalUserFs implements UserFs {
     // runs as the user's own uid and must be able to traverse + write them.
     // Recursively chown the entire tree so the tenant has full permission over all files.
     if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
-      chownRecursiveSync(root, uid, uid)
       try {
+        execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
+        execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
         chmodSync(root, 0o755)
         chmodSync(homeRoot(root), 0o755)
         chmodSync(workspaceRoot(root), 0o755)
-        if (existsSync(userProfile)) {
-          chmodSync(userProfile, 0o755)
-        }
-      } catch {}
+      } catch {
+        chownRecursiveSync(root, uid, uid)
+      }
     }
   }
 
