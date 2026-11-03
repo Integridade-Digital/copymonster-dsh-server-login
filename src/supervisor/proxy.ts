@@ -270,7 +270,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
             ).catch((err) => {
               app.log.error(err, `[dsh-proxy] auto-launch failed for user ${user.id}`)
             })
-            reply.type('text/html; charset=utf-8').send(getLaunchingHtml())
+            reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(getLaunchingHtml())
             return
           }
         }

@@ -6,8 +6,9 @@
  * @module dsh-server-login/web/routes/dsh
  */
 
-import type { FastifyPluginAsync } from 'fastify'
-import { requireAuth } from '../middleware/authn.js'
+import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
+import { resolveSessionUser, requireAuth } from '../middleware/authn.js'
+import { toPublicUser } from '../../db/types.js'
 import { sendFsError } from './desktop.js'
 import { AlreadyRunningError } from '../../supervisor/orchestrator.js'
 import { renderPatch } from '../../supervisor/patch.js'
@@ -31,8 +32,38 @@ const restartSchema = {
   },
 } as const
 
-function alive(status: string | undefined): boolean {
-  return status !== undefined && status !== 'crashed' && status !== 'stopped'
+const STATUS_TIMEOUT = Symbol('status-timeout')
+const STATUS_OPERATION_TIMEOUT_MS = 5000
+
+async function withTimeout<T>(operation: Promise<T>, timeoutMs: number): Promise<T | typeof STATUS_TIMEOUT> {
+  let timer: NodeJS.Timeout | undefined
+  try {
+    return await Promise.race([
+      operation,
+      new Promise<typeof STATUS_TIMEOUT>((resolve) => {
+        timer = setTimeout(() => resolve(STATUS_TIMEOUT), timeoutMs)
+        timer.unref()
+      }),
+    ])
+  } finally {
+    if (timer !== undefined) clearTimeout(timer)
+  }
+}
+
+async function requireStatusAuth(request: FastifyRequest, reply: FastifyReply): Promise<void> {
+  const user = await withTimeout(
+    resolveSessionUser(request.server, request.headers.cookie),
+    STATUS_OPERATION_TIMEOUT_MS,
+  )
+  if (user === STATUS_TIMEOUT) {
+    reply.code(503).header('retry-after', '3').send({ error: 'status_unavailable', stage: 'authentication' })
+    return
+  }
+  if (user === undefined) {
+    reply.code(401).send({ error: 'unauthorized' })
+    return
+  }
+  request.user = toPublicUser(user)
 }
 
 function dshUrl(baseDomain: string, user: { id: string; username: string }): string {
@@ -99,9 +130,17 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
     return { ok: true }
   })
 
-  app.get('/api/dsh/status', { preHandler: requireAuth }, async (request) => {
+  app.get('/api/dsh/status', { preHandler: requireStatusAuth }, async (request, reply) => {
     try {
-      const { main, watchdog } = await app.supervisor.status(request.user!.id)
+      const status = await withTimeout(
+        app.supervisor.status(request.user!.id),
+        STATUS_OPERATION_TIMEOUT_MS,
+      )
+      if (status === STATUS_TIMEOUT) {
+        request.log.error({ userId: request.user!.id }, 'DSH status lookup timed out')
+        return reply.code(503).header('retry-after', '3').send({ error: 'status_unavailable', stage: 'supervisor' })
+      }
+      const { main, watchdog } = status
       const isRunning = main?.status === 'running'
       const result = {
         running: isRunning,

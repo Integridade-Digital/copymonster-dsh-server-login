@@ -176,6 +176,30 @@
       margin-top: 24px;
       opacity: 0.8;
     }
+
+    .launch-error {
+      display: none;
+      margin-top: 18px;
+      padding: 14px;
+      border: 1px solid rgba(239, 68, 68, 0.35);
+      border-radius: 10px;
+      color: var(--text);
+      background: rgba(239, 68, 68, 0.08);
+      font-size: 13px;
+      line-height: 1.5;
+      text-align: left;
+    }
+
+    .launch-error button {
+      margin-top: 12px;
+      padding: 8px 12px;
+      border: 1px solid var(--card-border-highlight);
+      border-radius: 8px;
+      color: var(--text);
+      background: transparent;
+      cursor: pointer;
+      font-size: 13px;
+    }
   </style>
 </head>
 <body>
@@ -205,33 +229,91 @@
     </div>
 
     <p class="footer-note">Isolamento total ativo • Ambiente dedicado • CopyMonster SaaS</p>
+    <div class="launch-error" id="launch-error" role="alert" aria-live="assertive">
+      <div id="launch-error-message"></div>
+      <button type="button" onclick="window.location.reload()">Tentar novamente</button>
+    </div>
   </div>
 
   <script>
     let pollCount = 0;
-    const maxPolls = 60;
+    let polling = false;
+    let reloadScheduled = false;
+    let consecutiveFailures = 0;
+    const maxWaitMs = 120000;
+    const requestTimeoutMs = 5000;
+    const startedAt = Date.now();
+
+    function showFailure(message) {
+      document.querySelector('.spinner-wrap').style.display = 'none';
+      document.getElementById('step-3').className = 'step-item';
+      document.getElementById('launch-error-message').textContent = message;
+      document.getElementById('launch-error').style.display = 'block';
+    }
 
     async function checkStatus() {
+      if (polling || reloadScheduled) return;
+      polling = true;
       pollCount++;
+      let failureMessage = '';
       try {
-        const res = await fetch('/api/dsh/status', { credentials: 'include' });
-        if (res.ok) {
-          const data = await res.json();
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), requestTimeoutMs);
+        let res;
+        let data;
+        try {
+          res = await fetch('/api/dsh/status', {
+            credentials: 'include',
+            cache: 'no-store',
+            signal: controller.signal,
+          });
+          if (res.ok) data = await res.json();
+        } finally {
+          clearTimeout(timeout);
+        }
+        if (res.status === 401 || res.status === 403) {
+          showFailure('Sua sessão expirou ou perdeu autorização. Entre novamente e abra o CopyMonster.');
+          return;
+        }
+        if (!res.ok) {
+          failureMessage = `O serviço de inicialização respondeu HTTP ${res.status}.`;
+        } else {
+          consecutiveFailures = 0;
           if (data && data.running) {
             document.getElementById('step-2').className = 'step-item done';
             document.getElementById('step-2').querySelector('.step-icon').textContent = '✓';
             document.getElementById('step-3').className = 'step-item done';
             document.getElementById('step-3').querySelector('.step-icon').textContent = '✓';
-
-            // Redirect or reload into the active DSH session
-            setTimeout(() => {
-              window.location.reload();
-            }, 600);
+            reloadScheduled = true;
+            setTimeout(() => window.location.reload(), 600);
             return;
           }
+          if (data && data.status === 'crashed') {
+            const detail = data.instance && data.instance.lastError ? ` Detalhe: ${data.instance.lastError}` : '';
+            showFailure(`O processo do CopyMonster encerrou durante a inicialização.${detail}`);
+            return;
+          }
+          if (data && data.status === 'stopped') {
+            failureMessage = 'O processo do CopyMonster não está ativo. Tente novamente para iniciar o ambiente.';
+          }
         }
-      } catch (e) {
-        // Retry silently
+      } catch (error) {
+        failureMessage = error && error.name === 'AbortError'
+          ? 'A verificação do servidor demorou mais de 5 segundos.'
+          : 'Não foi possível consultar o status do ambiente.';
+      } finally {
+        polling = false;
+      }
+
+      if (failureMessage) consecutiveFailures++;
+      if (consecutiveFailures >= 3) {
+        showFailure(`${failureMessage} O servidor não conseguiu confirmar o estado do tenant após 3 tentativas. A tela parou para evitar um loop; verifique os logs do serviço e tente novamente depois.`);
+        return;
+      }
+
+      if (Date.now() - startedAt >= maxWaitMs) {
+        showFailure(`${failureMessage || 'O ambiente não ficou pronto dentro do tempo esperado.'} A inicialização foi interrompida nesta tela para evitar um loop. Verifique os logs do serviço de tenants antes de tentar novamente.`);
+        return;
       }
 
       if (pollCount > 10) {
@@ -239,12 +321,7 @@
         document.getElementById('step-2').querySelector('.step-icon').textContent = '✓';
         document.getElementById('step-3').className = 'step-item active';
       }
-
-      if (pollCount < maxPolls) {
-        setTimeout(checkStatus, 1500);
-      } else {
-        window.location.reload();
-      }
+      setTimeout(checkStatus, failureMessage ? 2500 : 1500);
     }
 
     setTimeout(checkStatus, 1200);
