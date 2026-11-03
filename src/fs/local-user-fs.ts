@@ -76,6 +76,7 @@ export class LocalUserFs implements UserFs {
     const root = this.rootFor(userId)
     ensureDir(homeRoot(root))
     ensureDir(workspaceRoot(root))
+    ensureDir(join(workspaceRoot(root), 'workspace'))
 
     // Provision the resident web profile so the per-user DSH can boot without
     // missing node_modules. Check known template profile locations.

@@ -1,3 +1,4 @@
+import { hashUid } from '../isolation.js'
 import { readFileSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join } from 'node:path'
@@ -262,7 +263,9 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
         if (slug) {
           const user = await app.db.findUserBySlug(slug)
           if (user) {
-            const folderAbs = app.userFs.resolvePath(user.id, 'workspace')
+            const uid = user.uid ?? hashUid(user.id, app.config.baseUid)
+            await app.userFs.initUserRoot(user.id, uid)
+            const folderAbs = app.userFs.resolvePath(user.id, '')
             void app.supervisor.launch(
               user.id,
               folderAbs,

@@ -13,7 +13,7 @@
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chownSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import { handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
@@ -303,6 +303,11 @@ export class LocalSpawner implements Spawner {
     }
     const resolvedOptions = { ...options, env, stdio }
 
+    // Ensure working directory exists before spawning
+    if (resolvedOptions.cwd) {
+      mkdirSync(resolvedOptions.cwd, { recursive: true, mode: 0o755 })
+    }
+
     if (this.config.isolationMode !== 'account') {
       const resolvedCommand = resolveBinary(command, env.PATH)
       return spawn(resolvedCommand, args, resolvedOptions)
@@ -310,6 +315,17 @@ export class LocalSpawner implements Spawner {
     // Ensure the Linux user exists before attempting setpriv
     await this.provisionLinuxUser(userId)
     const uid = await this.resolveUid(userId)
+    if (resolvedOptions.cwd && typeof process.getuid === 'function' && process.getuid() === 0) {
+      try {
+        chownSync(resolvedOptions.cwd, uid, uid)
+      } catch {}
+      try {
+        const root = userRoot(this.config.dataRoot, userId)
+        chmodSync(this.config.dataRoot, 0o755)
+        chmodSync(join(this.config.dataRoot, 'users'), 0o755)
+        chmodSync(root, 0o755)
+      } catch {}
+    }
     const prefix = this.config.spawnAsUserCommand.map((part) =>
       part.replaceAll('{UID}', String(uid)).replaceAll('{GID}', String(uid)),
     )
