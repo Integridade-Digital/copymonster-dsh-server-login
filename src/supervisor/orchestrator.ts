@@ -17,7 +17,7 @@ import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import { handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
 import { createPortGuard, type PortGuard } from './firewall.js'
-import { findFreePort, scrubEnv } from './spawn.js'
+import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
 import {
   AlreadyRunningError,
   type Endpoint,
@@ -188,8 +188,10 @@ export class LocalSpawner implements Spawner {
     const home = homeRoot(root)
     const workspace = workspaceRoot(root)
     const apiKey = await this.resolveApiKey(userId)
+    const scrubbed = scrubEnv(process.env)
     return {
-      ...scrubEnv(process.env),
+      ...scrubbed,
+      PATH: sanitizePath(scrubbed.PATH ?? process.env.PATH),
       // HOME drives the child's directory picker default (homedir()); point it
       // at the user's workspace so their folders show, not DSH's internal home.
       HOME: workspace,
@@ -254,15 +256,24 @@ export class LocalSpawner implements Spawner {
     options: { cwd: string; env: Record<string, string> },
   ): Promise<ChildProcess> {
     const stdio: StdioOptions = ['ignore', 'pipe', 'pipe']
+    const env = {
+      ...options.env,
+      PATH: sanitizePath(options.env.PATH ?? process.env.PATH),
+    }
+    const resolvedOptions = { ...options, env, stdio }
+
     if (this.config.isolationMode !== 'account') {
-      return spawn(command, args, { ...options, stdio })
+      const resolvedCommand = resolveBinary(command, env.PATH)
+      return spawn(resolvedCommand, args, resolvedOptions)
     }
     const uid = await this.resolveUid(userId)
     const prefix = this.config.spawnAsUserCommand.map((part) =>
       part.replaceAll('{UID}', String(uid)).replaceAll('{GID}', String(uid)),
     )
-    const [asCommand = 'setpriv', ...asArgs] = prefix
-    return spawn(asCommand, [...asArgs, command, ...args], { ...options, stdio })
+    let [asCommand = 'setpriv', ...asArgs] = prefix
+    asCommand = resolveBinary(asCommand, env.PATH)
+    const resolvedCommand = resolveBinary(command, env.PATH)
+    return spawn(asCommand, [...asArgs, resolvedCommand, ...args], resolvedOptions)
   }
 
   private trackChild(userId: string, instance: Instance, child: ChildProcess): void {

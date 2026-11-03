@@ -19,6 +19,14 @@
  */
 
 import { execFileSync } from 'node:child_process'
+import { existsSync } from 'node:fs'
+
+function resolveIptables(): string {
+  for (const candidate of ['/usr/sbin/iptables', '/sbin/iptables', '/usr/bin/iptables', '/bin/iptables']) {
+    if (existsSync(candidate)) return candidate
+  }
+  return 'iptables'
+}
 
 /** One guarded loopback port with idempotent install/remove. */
 export interface PortGuard {
@@ -54,18 +62,19 @@ export function createPortGuard(enabled: boolean): PortGuard | undefined {
     throw new Error('portGuard requires a Linux host running as root (iptables OUTPUT owner-match)')
   }
   const guarded = new Set<number>()
+  const iptablesBin = resolveIptables()
   return {
     install(port) {
       if (guarded.has(port)) return
       // Insert at position 1 so an earlier ACCEPT (ufw / conntrack) can't
       // swallow the packet before the REJECT is evaluated.
-      execFileSync('iptables', ruleArgs(port, '-I'))
+      execFileSync(iptablesBin, ruleArgs(port, '-I'))
       guarded.add(port)
     },
     remove(port) {
       if (!guarded.has(port)) return
       try {
-        execFileSync('iptables', ruleArgs(port, '-D'))
+        execFileSync(iptablesBin, ruleArgs(port, '-D'))
       } catch {
         // Best-effort teardown: a stale rule leaves the port closed to
         // co-tenants, which is fail-safe, and a dropped rule is already gone.

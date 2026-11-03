@@ -5,7 +5,7 @@
  */
 
 import { randomBytes } from 'node:crypto'
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
 
@@ -127,16 +127,22 @@ const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 const DEFAULT_RESTART_BACKOFF_MS = 1000
 const DEFAULT_ISOLATION_MODE: IsolationMode = 'soft'
-const DEFAULT_SPAWN_AS_USER_COMMAND = [
-  'setpriv',
-  '--reuid',
-  '{UID}',
-  '--regid',
-  '{GID}',
-  '--inh-caps=-all',
-  '--clear-groups',
-  '--',
-]
+function defaultSpawnAsUserCommand(): string[] {
+  const binary =
+    ['/usr/bin/setpriv', '/bin/setpriv', '/usr/local/bin/setpriv'].find((p) => existsSync(p)) ??
+    'setpriv'
+  return [
+    binary,
+    '--reuid',
+    '{UID}',
+    '--regid',
+    '{GID}',
+    '--inh-caps=-all',
+    '--clear-groups',
+    '--',
+  ]
+}
+const DEFAULT_SPAWN_AS_USER_COMMAND = defaultSpawnAsUserCommand()
 const DEFAULT_BASE_UID = 100000
 const DEFAULT_BASE_DOMAIN = ''
 const DEFAULT_COOKIE_DOMAIN = ''
