@@ -51,16 +51,17 @@ export function sanitizePath(existingPath?: string): string {
  * and exists in standard system directories or PATH.
  */
 export function resolveBinary(cmd: string, pathEnv?: string): string {
-  if (cmd.includes('/') || cmd.includes('\\')) {
+  if ((cmd.includes('/') || cmd.includes('\\')) && existsSync(cmd)) {
     return cmd
   }
+  const baseName = cmd.split(/[/\\]/).pop() ?? cmd
   const knownLocations = ['/usr/bin', '/bin', '/usr/local/bin', '/usr/sbin', '/sbin']
   const searchDirs = [
     ...knownLocations,
     ...(pathEnv ? pathEnv.split(':').filter(Boolean) : []),
   ]
   for (const dir of searchDirs) {
-    const full = `${dir}/${cmd}`
+    const full = `${dir}/${baseName}`
     if (existsSync(full)) {
       return full
     }
