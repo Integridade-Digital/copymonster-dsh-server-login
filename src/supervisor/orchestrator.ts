@@ -12,7 +12,7 @@
 
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { mkdirSync, writeFileSync } from 'node:fs'
+import { chownSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import { handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
@@ -169,9 +169,17 @@ export class LocalSpawner implements Spawner {
    * Per role, so a watchdog spawning alongside its main never races the file. */
   private writePatch(userId: string, role: InstanceRole, patch: string): string {
     const dir = join(userRoot(this.config.dataRoot, userId), 'patches')
-    mkdirSync(dir, { recursive: true })
+    mkdirSync(dir, { recursive: true, mode: 0o755 })
     const path = join(dir, `${role}.yml`)
-    writeFileSync(path, patch)
+    writeFileSync(path, patch, { mode: 0o644 })
+    if (this.config.isolationMode === 'account' && typeof process.getuid === 'function' && process.getuid() === 0) {
+      void this.resolveUid(userId).then((uid) => {
+        try {
+          chownSync(dir, uid, uid)
+          chownSync(path, uid, uid)
+        } catch {}
+      }).catch(() => {})
+    }
     return path
   }
 
@@ -287,6 +295,7 @@ export class LocalSpawner implements Spawner {
       instance.status = 'crashed'
       instance.lastError = err.message
       this.children.delete(instance.id)
+      process.stderr.write(`[dsh-child ${instance.role}] spawn error: ${err.message}\n`)
     })
     child.on('exit', (code) => {
       instance.exitCode = code ?? undefined

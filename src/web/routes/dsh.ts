@@ -102,8 +102,10 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
   app.get('/api/dsh/status', { preHandler: requireAuth }, async (request) => {
     try {
       const { main, watchdog } = await app.supervisor.status(request.user!.id)
+      const isRunning = main?.status === 'running'
       const result = {
-        running: alive(main?.status),
+        running: isRunning,
+        status: main?.status ?? 'stopped',
         instance: main
           ? { id: main.id, port: main.port, status: main.status, exitCode: main.exitCode, lastError: main.lastError }
           : null,

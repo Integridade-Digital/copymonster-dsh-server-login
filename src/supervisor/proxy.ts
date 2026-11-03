@@ -183,9 +183,14 @@ function proxyHttp(
         upRes.pipe(reply.raw)
       },
     )
-    upstream.on('error', () => {
+    upstream.on('error', (err) => {
       if (retry) {
-        reply.raw.destroy()
+        if (!reply.raw.headersSent) {
+          reply.raw.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' })
+          reply.raw.end(getLaunchingHtml())
+        } else {
+          reply.raw.destroy()
+        }
         return
       }
       // A stale keep-alive socket or a Pod that just restarted: drop the pool,
@@ -262,7 +267,9 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
               user.id,
               folderAbs,
               app.config.enablePatch ? renderPatch([]) : undefined,
-            ).catch(() => {})
+            ).catch((err) => {
+              app.log.error(err, `[dsh-proxy] auto-launch failed for user ${user.id}`)
+            })
             reply.type('text/html; charset=utf-8').send(getLaunchingHtml())
             return
           }

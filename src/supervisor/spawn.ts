@@ -24,6 +24,7 @@ const ALLOWED_ENV = new Set([
   'ProgramFiles(x86)',
   'LANG',
   'LC_ALL',
+  'NODE_PATH',
 ])
 
 /** Drop credential-shaped and unknown env vars; keep only a safe allowlist. */

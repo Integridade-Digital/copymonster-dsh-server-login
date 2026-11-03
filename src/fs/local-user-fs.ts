@@ -6,7 +6,8 @@
  * @module dsh-server-login/fs/local-user-fs
  */
 
-import { chownSync, chmodSync, cpSync, existsSync } from 'node:fs'
+import { chownSync, chmodSync, cpSync, existsSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { homedir } from 'node:os'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -27,6 +28,47 @@ function fsError(err: unknown, onMissing: 'not_found' | 'parent_missing'): never
   throw err
 }
 
+
+function chownRecursiveSync(targetPath: string, uid: number, gid: number): void {
+  try {
+    chownSync(targetPath, uid, gid)
+    const entries = readdirSync(targetPath, { withFileTypes: true })
+    for (const entry of entries) {
+      const full = join(targetPath, entry.name)
+      if (entry.isDirectory()) {
+        chownRecursiveSync(full, uid, gid)
+      } else {
+        try {
+          chownSync(full, uid, gid)
+        } catch {}
+      }
+    }
+  } catch {}
+}
+
+const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
+const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
+
+function ensureCopyMonsterBundle(packageJsonPath: string): void {
+  try {
+    if (!existsSync(packageJsonPath)) return
+    const raw = readFileSync(packageJsonPath, 'utf8')
+    const manifest = JSON.parse(raw)
+    const profile = manifest?.dsh?.profile
+    if (profile === undefined || !Array.isArray(profile.bundles)) return
+    if (profile.bundles.includes(COPYMONSTER_BUNDLE)) return
+    const bundles = [...profile.bundles]
+    const anchorIdx = bundles.indexOf(WEB_APP_BUNDLE)
+    if (anchorIdx === -1) {
+      bundles.push(COPYMONSTER_BUNDLE)
+    } else {
+      bundles.splice(anchorIdx + 1, 0, COPYMONSTER_BUNDLE)
+    }
+    manifest.dsh.profile.bundles = bundles
+    writeFileSync(packageJsonPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
+  } catch {}
+}
+
 export class LocalUserFs implements UserFs {
   constructor(private readonly rootFor: UserRootResolver) {}
 
@@ -34,26 +76,38 @@ export class LocalUserFs implements UserFs {
     const root = this.rootFor(userId)
     ensureDir(homeRoot(root))
     ensureDir(workspaceRoot(root))
+
+    // Provision the resident web profile so the per-user DSH can boot without
+    // missing node_modules. Check known template profile locations.
+    const candidateTemplates = [
+      '/root/.dsh/profiles/web',
+      '/var/lib/copymonster-dsh/profiles/web',
+      join(homedir(), '.dsh', 'profiles', 'web'),
+    ]
+    const templateProfile = candidateTemplates.find((p) => existsSync(p))
+    const userProfile = join(homeRoot(root), 'profiles', 'web')
+
+    if (templateProfile && !existsSync(userProfile)) {
+      cpSync(templateProfile, userProfile, { recursive: true })
+    }
+
+    // Always ensure the tenant's web profile includes the CopyMonster bundle
+    const userPackageJson = join(userProfile, 'package.json')
+    ensureCopyMonsterBundle(userPackageJson)
+
     // The roots were created by the (possibly root) control plane; the DSH child
     // runs as the user's own uid and must be able to traverse + write them.
-    // chown the user root + home/ws so the child can mkdir profiles/, etc.
+    // Recursively chown the entire tree so the tenant has full permission over all files.
     if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
-      chownSync(root, uid, uid)
-      chownSync(homeRoot(root), uid, uid)
-      chownSync(workspaceRoot(root), uid, uid)
-      // 0700 + sticky-ish owner only; keep group/other off.
-      chmodSync(homeRoot(root), 0o700)
-      chmodSync(workspaceRoot(root), 0o700)
-    }
-    // Provision the resident web profile so the per-user DSH can boot without
-    // missing node_modules. Copy from the installation's default profile.
-    const templateProfile = '/root/.dsh/profiles/web'
-    const userProfile = join(homeRoot(root), 'profiles', 'web')
-    if (existsSync(templateProfile) && !existsSync(userProfile)) {
-      cpSync(templateProfile, userProfile, { recursive: true })
-      if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
-        chownSync(userProfile, uid, uid)
-      }
+      chownRecursiveSync(root, uid, uid)
+      try {
+        chmodSync(root, 0o755)
+        chmodSync(homeRoot(root), 0o755)
+        chmodSync(workspaceRoot(root), 0o755)
+        if (existsSync(userProfile)) {
+          chmodSync(userProfile, 0o755)
+        }
+      } catch {}
     }
   }
 
