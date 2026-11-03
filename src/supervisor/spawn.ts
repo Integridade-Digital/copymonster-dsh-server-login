@@ -27,6 +27,9 @@ const ALLOWED_ENV = new Set([
   'LC_ALL',
   'NODE_PATH',
   'DSH_SERVER_LOGIN_BASE_DOMAIN',
+  'SUPABASE_URL',
+  'SUPABASE_ANON_KEY',
+  'SUPABASE_SERVICE_ROLE_KEY',
 ])
 
 export const DEFAULT_SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
