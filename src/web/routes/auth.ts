@@ -51,13 +51,12 @@ interface Credentials {
 }
 
 const sessionTokenSchema = {
-  body: {
+  headers: {
     type: 'object',
-    required: ['supabaseJwt'],
+    required: ['authorization'],
     additionalProperties: false,
     properties: {
-      supabaseJwt: { type: 'string', minLength: 10, maxLength: 4096 },
-      username: { type: 'string', minLength: 3, maxLength: 32, pattern: '^[a-zA-Z0-9_-]+$' },
+      authorization: { type: 'string', pattern: '^Bearer .+$' },
     },
   },
 } as const
@@ -181,7 +180,11 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     '/api/auth/session-token',
     { schema: sessionTokenSchema, config: { rateLimit: { max: 20, timeWindow: '1 minute' } } },
     async (request, reply) => {
-      const { supabaseJwt } = request.body as { supabaseJwt: string }
+      const authHeader = request.headers.authorization
+      if (!authHeader || !authHeader.startsWith('Bearer ')) {
+        return reply.code(401).send({ error: 'missing-or-invalid-bearer' })
+      }
+      const supabaseJwt = authHeader.slice(7)
       const exchanged = await exchangeSupabaseSession(app.config.mainAppUrl, supabaseJwt)
       if (!exchanged.ok) {
         if (exchanged.reason === 'invalid') {

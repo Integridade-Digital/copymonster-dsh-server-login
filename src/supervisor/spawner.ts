@@ -25,6 +25,8 @@ export interface Instance {
   lastError?: string
   /** Rendered cordis patch **content**, not a path — see {@link Spawner.launch}. */
   patch?: string
+  /** Parsed from the child's readiness line for the browser-auth exchange. */
+  authToken?: string
 }
 
 /** Thrown when a user already has a running main DSH. */
@@ -45,6 +47,8 @@ export interface UserStatus {
 export interface Endpoint {
   host: string
   port: number
+  /** One-time launch token for the DSH browser-auth cookie exchange. */
+  authToken?: string
 }
 
 /** A main DSH Pod as observed by the k8s backend (for reconcile + the watch). */

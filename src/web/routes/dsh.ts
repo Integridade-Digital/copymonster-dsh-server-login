@@ -48,7 +48,9 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
     let folderAbs: string
     try {
       folderAbs = fs.resolvePath(user.id, folder)
-      if (!(await fs.isDirectory(user.id, folder))) return reply.code(400).send({ error: 'not_a_folder' })
+      if (!(await fs.isDirectory(user.id, folder))) {
+        return reply.code(400).send({ error: 'not_a_folder' })
+      }
     } catch (err) {
       return sendFsError(reply, err)
     }
@@ -98,14 +100,19 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
   })
 
   app.get('/api/dsh/status', { preHandler: requireAuth }, async (request) => {
-    const { main, watchdog } = await app.supervisor.status(request.user!.id)
-    return {
-      running: alive(main?.status),
-      instance: main
-        ? { id: main.id, port: main.port, status: main.status, exitCode: main.exitCode, lastError: main.lastError }
-        : null,
-      watchdog: watchdog ? { id: watchdog.id, status: watchdog.status, exitCode: watchdog.exitCode } : null,
-      url: dshUrl(app.config.baseDomain, request.user!),
+    try {
+      const { main, watchdog } = await app.supervisor.status(request.user!.id)
+      const result = {
+        running: alive(main?.status),
+        instance: main
+          ? { id: main.id, port: main.port, status: main.status, exitCode: main.exitCode, lastError: main.lastError }
+          : null,
+        watchdog: watchdog ? { id: watchdog.id, status: watchdog.status, exitCode: watchdog.exitCode } : null,
+        url: dshUrl(app.config.baseDomain, request.user!),
+      }
+      return result
+    } catch (err: any) {
+      throw err
     }
   })
 

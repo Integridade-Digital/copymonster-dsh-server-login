@@ -6,7 +6,7 @@
  * @module dsh-server-login/fs/local-user-fs
  */
 
-import { chownSync, chmodSync } from 'node:fs'
+import { chownSync, chmodSync, cpSync, existsSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
@@ -44,6 +44,16 @@ export class LocalUserFs implements UserFs {
       // 0700 + sticky-ish owner only; keep group/other off.
       chmodSync(homeRoot(root), 0o700)
       chmodSync(workspaceRoot(root), 0o700)
+    }
+    // Provision the resident web profile so the per-user DSH can boot without
+    // missing node_modules. Copy from the installation's default profile.
+    const templateProfile = '/root/.dsh/profiles/web'
+    const userProfile = join(homeRoot(root), 'profiles', 'web')
+    if (existsSync(templateProfile) && !existsSync(userProfile)) {
+      cpSync(templateProfile, userProfile, { recursive: true })
+      if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
+        chownSync(userProfile, uid, uid)
+      }
     }
   }
 

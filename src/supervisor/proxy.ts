@@ -238,6 +238,13 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     // The SSO exchange is an orchestrator route, not tenant traffic: a caller
     // without a session cookie must reach it before the proxy's auth check.
     if ((request.raw.url ?? '').split('?')[0] === '/api/auth/session-token') return
+
+    // Public assets (logo, favicon, manifest) must be served even when DSH is
+    // not running. Let them fall through to the static file handler.
+    const pathname = (request.raw.url ?? '').split('?')[0]
+    const publicAssets = ['/brand.png', '/favicon.ico', '/manifest.webmanifest']
+    if (publicAssets.includes(pathname)) return
+
     const access = await resolveSubdomainAccess(app, clientHost(request.headers), request.headers.cookie)
     if (access === null) return
     if ('error' in access) {
