@@ -239,6 +239,10 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     // without a session cookie must reach it before the proxy's auth check.
     if ((request.raw.url ?? '').split('?')[0] === '/api/auth/session-token') return
 
+    // Bypass /api/dsh/* routes - let the orchestrator handle them directly
+    // to avoid proxy forwarding issues when the DSH is starting/crashed.
+    if (request.raw.url?.startsWith('/api/dsh/')) return
+
     // Public assets (logo, favicon, manifest) must be served even when DSH is
     // not running. Let them fall through to the static file handler.
     const pathname = (request.raw.url ?? '').split('?')[0]

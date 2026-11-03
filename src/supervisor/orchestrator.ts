@@ -92,8 +92,9 @@ export class LocalSpawner implements Spawner {
 
   /** Endpoint the proxy forwards to (local → the running main's loopback port). */
   async endpointFor(userId: string): Promise<Endpoint | undefined> {
-    const port = this.mains.get(userId)?.port
-    return port === undefined ? undefined : { host: '127.0.0.1', port }
+    const instance = this.mains.get(userId)
+    if (instance === undefined || instance.status !== 'running') return undefined
+    return { host: '127.0.0.1', port: instance.port }
   }
 
   /** Stop both processes for a user (cancelling any pending restart). */
