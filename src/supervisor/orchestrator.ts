@@ -381,6 +381,7 @@ export class LocalSpawner implements Spawner {
    * @returns the argv prefix, or undefined when no limit is configured.
    */
   private async resourceScopeArgs(uid: number, userId: string): Promise<string[] | undefined> {
+    if (!this.config.resourceScopes) return undefined
     const user = await this.db.findUserById(userId)
     const memoryMax = user?.memory_max ?? this.config.memoryMax
     const cpuQuota = user?.cpu_quota ?? this.config.cpuQuota

@@ -66,6 +66,15 @@ export interface ServerConfig {
   /** `TasksMax` for each tenant DSH scope; caps process and thread count. */
   tasksMax?: number
   /**
+   * Whether tenant children run inside a transient systemd scope.
+   *
+   * Off by default: on this host `systemd-run --scope` from inside the
+   * orchestrator service fails to exec the tenant binary and leaves the
+   * service's cgroup teardown timing out, so the feature must be enabled only
+   * after it is validated on the target host.
+   */
+  resourceScopes: boolean
+  /**
    * Per-plan scope limits, keyed by plan slug. The main app reports the slug on
    * every SSO exchange and the orchestrator stores the resolved values on the
    * user row; a slug absent from this map leaves that tenant on the global
@@ -367,6 +376,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     memoryMax: parseLimit('DSH_SERVER_LOGIN_MEMORY_MAX', process.env.DSH_SERVER_LOGIN_MEMORY_MAX, MEMORY_MAX_PATTERN),
     cpuQuota: parseLimit('DSH_SERVER_LOGIN_CPU_QUOTA', process.env.DSH_SERVER_LOGIN_CPU_QUOTA, CPU_QUOTA_PATTERN),
     tasksMax: parsePositiveInt('DSH_SERVER_LOGIN_TASKS_MAX', process.env.DSH_SERVER_LOGIN_TASKS_MAX),
+    resourceScopes: toBool(process.env.DSH_SERVER_LOGIN_RESOURCE_SCOPES, false),
     planLimits: parsePlanLimits(process.env.DSH_SERVER_LOGIN_PLAN_LIMITS),
     encryptionSecret:
       overrides.encryptionSecret ?? resolveEncryptionSecret(dataRoot),
