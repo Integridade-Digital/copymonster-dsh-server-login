@@ -319,6 +319,13 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
           }
         }
       }
+      if (access.error === 'reauthentication-required' && request.method === 'GET'
+        && ((request.headers.accept ?? '').includes('text/html') || request.raw.url === '/' || request.raw.url === '')) {
+        // A session issued before the identity handshake cannot be signed;
+        // send the browser to the main app to sign in again.
+        reply.header('cache-control', 'no-store').redirect(app.config.mainAppUrl, 302)
+        return
+      }
       reply.code(access.code).send({ error: access.error })
       return
     }
