@@ -6,7 +6,7 @@ After=local-fs.target
 [Service]
 Type=oneshot
 ExecStart=/usr/bin/node /opt/copymonster/dsh-server-login/scripts/monitor.mjs
-Environment=DSH_MONITOR_DISK_PCT=85
+Environment=DSH_MONITOR_DISK_PCT=90
 Environment=DSH_MONITOR_MEMORY_PCT=90
 Environment=DSH_MONITOR_5XX_LIMIT=20
 Environment=DSH_MONITOR_WINDOW_MINUTES=5
