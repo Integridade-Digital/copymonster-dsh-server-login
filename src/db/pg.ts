@@ -31,6 +31,7 @@ import {
   type User,
   type UserRole,
   type Workspace,
+  UserPlanLimits,
 } from './types.js'
 
 // Postgres returns int8 (BIGINT) as a string to avoid JS 53-bit precision loss.
@@ -39,7 +40,7 @@ import {
 // both backends. This is process-global and idempotent.
 types.setTypeParser(20, (value: string) => Number(value))
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -84,6 +85,10 @@ export class PgAdapter implements DbAdapter {
           approved_by: null,
           uid,
           supabase_sub: null,
+          plan_slug: null,
+          memory_max: null,
+          cpu_quota: null,
+          tasks_max: null,
         }
       })
     } catch (e) {
@@ -133,6 +138,13 @@ export class PgAdapter implements DbAdapter {
 
   async setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void> {
     await this.pool.query('UPDATE users SET supabase_sub = $1 WHERE id = $2', [supabaseSub, userId])
+  }
+
+  async setUserPlanLimits(userId: string, limits: UserPlanLimits): Promise<void> {
+    await this.pool.query(
+      'UPDATE users SET plan_slug = $1, memory_max = $2, cpu_quota = $3, tasks_max = $4 WHERE id = $5',
+      [limits.planSlug, limits.memoryMax, limits.cpuQuota, limits.tasksMax, userId],
+    )
   }
 
   async setUserUid(userId: string, uid: number): Promise<void> {

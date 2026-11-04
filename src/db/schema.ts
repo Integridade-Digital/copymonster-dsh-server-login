@@ -225,6 +225,23 @@ const PG_V5 = `
 ALTER TABLE users ADD COLUMN supabase_sub TEXT UNIQUE;
 `
 
+// v6: plan-derived resource limits. Written on every SSO exchange from the
+// plan the main app reports, so the spawner can size the tenant's systemd
+// scope without querying Supabase itself.
+const SQLITE_V6 = `
+ALTER TABLE users ADD COLUMN plan_slug TEXT;
+ALTER TABLE users ADD COLUMN memory_max TEXT;
+ALTER TABLE users ADD COLUMN cpu_quota TEXT;
+ALTER TABLE users ADD COLUMN tasks_max INTEGER;
+`
+
+const PG_V6 = `
+ALTER TABLE users ADD COLUMN plan_slug TEXT;
+ALTER TABLE users ADD COLUMN memory_max TEXT;
+ALTER TABLE users ADD COLUMN cpu_quota TEXT;
+ALTER TABLE users ADD COLUMN tasks_max INTEGER;
+`
+
 interface Migration {
   version: number
   name: string
@@ -238,6 +255,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 3, name: 'per-user uid', sqlite: SQLITE_V3, pg: PG_V3 },
   { version: 4, name: 'instance desired state', sqlite: SQLITE_V4, pg: PG_V4 },
   { version: 5, name: 'supabase sub link', sqlite: SQLITE_V5, pg: PG_V5 },
+  { version: 6, name: 'plan resource limits', sqlite: SQLITE_V6, pg: PG_V6 },
 ]
 
 /** Apply unapplied SQLite migrations inside a single transaction. */

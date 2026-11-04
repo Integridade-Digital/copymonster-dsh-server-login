@@ -21,6 +21,22 @@ export interface User {
   uid: number | null
   /** Supabase Auth user ID (sub claim), for linking local user to Supabase. */
   supabase_sub: string | null
+  /** Plan slug reported by the main app on the last SSO exchange. */
+  plan_slug: string | null
+  /** `MemoryMax` for this tenant's scope, resolved from the plan. */
+  memory_max: string | null
+  /** `CPUQuota` for this tenant's scope, resolved from the plan. */
+  cpu_quota: string | null
+  /** `TasksMax` for this tenant's scope, resolved from the plan. */
+  tasks_max: number | null
+}
+
+/** Plan-derived resource limits stored on a user row. */
+export interface UserPlanLimits {
+  planSlug: string
+  memoryMax: string | null
+  cpuQuota: string | null
+  tasksMax: number | null
 }
 
 /** The user shape safe to return over the wire. */
@@ -150,6 +166,10 @@ export function toUser(row: Record<string, unknown>): User {
     created_at: row.created_at as number,
     approved_by: (row.approved_by as string | null) ?? null,
     uid: (row.uid as number | null) ?? null,
+    plan_slug: (row.plan_slug as string | null) ?? null,
+    memory_max: (row.memory_max as string | null) ?? null,
+    cpu_quota: (row.cpu_quota as string | null) ?? null,
+    tasks_max: (row.tasks_max as number | null) ?? null,
     supabase_sub: (row.supabase_sub as string | null) ?? null,
   }
 }

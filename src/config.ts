@@ -65,6 +65,13 @@ export interface ServerConfig {
   cpuQuota?: string
   /** `TasksMax` for each tenant DSH scope; caps process and thread count. */
   tasksMax?: number
+  /**
+   * Per-plan scope limits, keyed by plan slug. The main app reports the slug on
+   * every SSO exchange and the orchestrator stores the resolved values on the
+   * user row; a slug absent from this map leaves that tenant on the global
+   * `memoryMax`/`cpuQuota`/`tasksMax` above.
+   */
+  planLimits: Record<string, { memoryMax?: string; cpuQuota?: string; tasksMax?: number }>
   /** Secret used to encrypt per-user secrets at rest (from env or dataRoot/secret.key). */
   encryptionSecret: string
   /** Deployment mode (see {@link DeployMode}). */
@@ -178,6 +185,56 @@ function parseLimit(name: string, value: string | undefined, pattern: RegExp): s
     throw new Error(`${name} must match ${pattern.source}, got ${JSON.stringify(value)}`)
   }
   return trimmed
+}
+
+/**
+ * Parse and validate the per-plan limit map.
+ *
+ * Every entry is checked against the same systemd syntax as the global limits,
+ * so a typo fails at load instead of at the first tenant spawn.
+ * @param raw - JSON object keyed by plan slug.
+ * @returns the validated map, empty when unset.
+ * @throws Error when the JSON or any value is invalid.
+ */
+function parsePlanLimits(raw: string | undefined): Record<string, { memoryMax?: string; cpuQuota?: string; tasksMax?: number }> {
+  if (raw === undefined || raw.trim() === '') return {}
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw)
+  } catch {
+    throw new Error('DSH_SERVER_LOGIN_PLAN_LIMITS must be valid JSON')
+  }
+  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+    throw new Error('DSH_SERVER_LOGIN_PLAN_LIMITS must be a JSON object keyed by plan slug')
+  }
+  const limits: Record<string, { memoryMax?: string; cpuQuota?: string; tasksMax?: number }> = {}
+  for (const [slug, value] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!/^[a-z0-9-]{1,32}$/.test(slug)) {
+      throw new Error(`DSH_SERVER_LOGIN_PLAN_LIMITS: invalid plan slug ${JSON.stringify(slug)}`)
+    }
+    if (value === null || typeof value !== 'object' || Array.isArray(value)) {
+      throw new Error(`DSH_SERVER_LOGIN_PLAN_LIMITS: ${slug} must be an object`)
+    }
+    const entry = value as Record<string, unknown>
+    const memoryMax = entry.memoryMax === undefined ? undefined : String(entry.memoryMax)
+    const cpuQuota = entry.cpuQuota === undefined ? undefined : String(entry.cpuQuota)
+    const tasksMax = entry.tasksMax === undefined ? undefined : Number(entry.tasksMax)
+    if (memoryMax !== undefined && !MEMORY_MAX_PATTERN.test(memoryMax)) {
+      throw new Error(`DSH_SERVER_LOGIN_PLAN_LIMITS: ${slug}.memoryMax must match ${MEMORY_MAX_PATTERN.source}`)
+    }
+    if (cpuQuota !== undefined && !CPU_QUOTA_PATTERN.test(cpuQuota)) {
+      throw new Error(`DSH_SERVER_LOGIN_PLAN_LIMITS: ${slug}.cpuQuota must match ${CPU_QUOTA_PATTERN.source}`)
+    }
+    if (tasksMax !== undefined && (!Number.isInteger(tasksMax) || tasksMax <= 0)) {
+      throw new Error(`DSH_SERVER_LOGIN_PLAN_LIMITS: ${slug}.tasksMax must be a positive integer`)
+    }
+    limits[slug] = {
+      ...(memoryMax === undefined ? {} : { memoryMax }),
+      ...(cpuQuota === undefined ? {} : { cpuQuota }),
+      ...(tasksMax === undefined ? {} : { tasksMax }),
+    }
+  }
+  return limits
 }
 
 /**
@@ -310,6 +367,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     memoryMax: parseLimit('DSH_SERVER_LOGIN_MEMORY_MAX', process.env.DSH_SERVER_LOGIN_MEMORY_MAX, MEMORY_MAX_PATTERN),
     cpuQuota: parseLimit('DSH_SERVER_LOGIN_CPU_QUOTA', process.env.DSH_SERVER_LOGIN_CPU_QUOTA, CPU_QUOTA_PATTERN),
     tasksMax: parsePositiveInt('DSH_SERVER_LOGIN_TASKS_MAX', process.env.DSH_SERVER_LOGIN_TASKS_MAX),
+    planLimits: parsePlanLimits(process.env.DSH_SERVER_LOGIN_PLAN_LIMITS),
     encryptionSecret:
       overrides.encryptionSecret ?? resolveEncryptionSecret(dataRoot),
     deployMode,

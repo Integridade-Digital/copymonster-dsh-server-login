@@ -49,6 +49,7 @@ import {
   setInstanceStatus as setInstanceStatusSync,
   setUserRole as setUserRoleSync,
   setUserSupabaseSub as setUserSupabaseSubSync,
+  setUserPlanLimits as setUserPlanLimitsSync,
   setUserUid as setUserUidSync,
   upsertDomain as upsertDomainSync,
   upsertInstance as upsertInstanceSync,
@@ -68,6 +69,7 @@ import type {
   User,
   UserRole,
   Workspace,
+  UserPlanLimits,
 } from './types.js'
 
 export class SqliteAdapter implements DbAdapter {
@@ -115,6 +117,10 @@ export class SqliteAdapter implements DbAdapter {
 
   async setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void> {
     setUserSupabaseSubSync(this.db, userId, supabaseSub)
+  }
+
+  async setUserPlanLimits(userId: string, limits: UserPlanLimits): Promise<void> {
+    setUserPlanLimitsSync(this.db, userId, limits)
   }
 
   async setUserUid(userId: string, uid: number): Promise<void> {

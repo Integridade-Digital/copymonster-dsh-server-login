@@ -64,6 +64,8 @@ const sessionTokenSchema = {
 interface MainAppSession {
   sub: string
   username: string
+  /** Plan slug the main app reported; absent when it could not read it. */
+  planSlug?: string
 }
 
 type ExchangeResult =
@@ -123,7 +125,12 @@ async function exchangeSupabaseSession(
   if (typeof username !== 'string' || !/^[a-z0-9-]{1,32}$/.test(username)) {
     return { ok: false, reason: 'unavailable' }
   }
-  return { ok: true, session: { sub, username } }
+  const planSlug = record.plan_slug
+  const validPlan = typeof planSlug === 'string' && /^[a-z0-9-]{1,32}$/.test(planSlug)
+  return {
+    ok: true,
+    session: { sub, username, ...(validPlan ? { planSlug } : {}) },
+  }
 }
 
 /** Persist a session row and set its signed cookie. */
@@ -231,6 +238,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
 
       if (user.role === 'disabled') return reply.code(403).send({ error: 'disabled' })
       if (user.role === 'pending') return reply.code(403).send({ error: 'pending_review' })
+
+      // The plan travels with the exchange, so the spawner can size the tenant's
+      // resource scope without the orchestrator ever querying Supabase.
+      if (exchanged.session.planSlug !== undefined) {
+        const limits = app.config.planLimits[exchanged.session.planSlug]
+        await app.db.setUserPlanLimits(user.id, {
+          planSlug: exchanged.session.planSlug,
+          memoryMax: limits?.memoryMax ?? null,
+          cpuQuota: limits?.cpuQuota ?? null,
+          tasksMax: limits?.tasksMax ?? null,
+        })
+      }
 
       await issueSession(app, request, reply, user)
       await app.db.audit(user.id, 'sso_login', null)

@@ -28,13 +28,14 @@ import {
   type PublicUser,
   type SessionRow,
   type SessionUser,
+  type UserPlanLimits,
   type UpsertDshInstanceInput,
   type User,
   type UserRole,
   type Workspace,
 } from './types.js'
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -58,6 +59,10 @@ export function createUser(db: Database, input: CreateUserInput, baseUid: number
       created_at: createdAt,
       approved_by: null,
       uid,
+      plan_slug: null,
+      memory_max: null,
+      cpu_quota: null,
+      tasks_max: null,
       supabase_sub: null,
     }
   })()
@@ -102,6 +107,18 @@ export function setUserRole(db: Database, id: string, role: UserRole, approvedBy
       ? prepare(db, 'UPDATE users SET role = ? WHERE id = ?').run(role, id)
       : prepare(db, 'UPDATE users SET role = ?, approved_by = ? WHERE id = ?').run(role, approvedBy, id)
   return info.changes > 0
+}
+
+/**
+ * Store the plan and its resolved resource limits for one user.
+ * @param db - database adapter.
+ * @param userId - the user the limits belong to.
+ * @param limits - plan slug plus the scope values it resolves to.
+ */
+export function setUserPlanLimits(db: Database, userId: string, limits: UserPlanLimits): void {
+  prepare(db,
+    'UPDATE users SET plan_slug = ?, memory_max = ?, cpu_quota = ?, tasks_max = ? WHERE id = ?',
+  ).run(limits.planSlug, limits.memoryMax, limits.cpuQuota, limits.tasksMax, userId)
 }
 
 export function setUserSupabaseSub(db: Database, userId: string, supabaseSub: string): void {

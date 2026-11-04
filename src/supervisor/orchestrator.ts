@@ -16,6 +16,7 @@ import { randomUUID } from 'node:crypto'
 import { chmodSync, chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
+import type { User } from '../db/types.js'
 import { grantUserRootPermissions, handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
 import { createPortGuard, type PortGuard } from './firewall.js'
 import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
@@ -60,8 +61,8 @@ export class LocalSpawner implements Spawner {
     private readonly resolveApiKey: (userId: string) => Promise<string | null>,
     /** Resolve the user's assigned Linux uid (falls back to hash when unset). */
     private readonly resolveUid: (userId: string) => Promise<number>,
-    /** Database adapter to look up usernames for Linux user provisioning. */
-    private readonly db: { findUserById(id: string): Promise<{ username: string } | undefined> },
+    /** Database adapter: usernames for Linux provisioning, plan limits for scopes. */
+    private readonly db: { findUserById(id: string): Promise<User | undefined> },
   ) {
     this.portGuard = createPortGuard(config.portGuard)
   }
@@ -353,7 +354,7 @@ export class LocalSpawner implements Spawner {
     // A configured resource limit runs the child inside a transient systemd
     // scope, which also drops privileges via --uid/--gid. Without one, the
     // existing setpriv prefix keeps the current behaviour.
-    const scopeArgs = this.resourceScopeArgs(uid)
+    const scopeArgs = await this.resourceScopeArgs(uid, userId)
     if (scopeArgs !== undefined) {
       const runner = resolveBinary('systemd-run', env.PATH)
       return spawn(runner, [...scopeArgs, resolvedCommand, ...args], resolvedOptions)
@@ -370,15 +371,21 @@ export class LocalSpawner implements Spawner {
   /**
    * Build the `systemd-run --scope` prefix that caps one tenant's resources.
    *
-   * The scope also performs the privilege drop (`--uid`/`--gid`), so it
-   * replaces the setpriv prefix rather than nesting inside it. `--collect`
-   * removes the transient unit when the child exits.
+   * The plan-derived values stored on the user row win; the global config is
+   * the fallback for a tenant whose plan is unknown. The scope also performs
+   * the privilege drop (`--uid`/`--gid`), so it replaces the setpriv prefix
+   * rather than nesting inside it, and `--collect` removes the transient unit
+   * when the child exits.
    * @param uid - the tenant's Linux uid.
+   * @param userId - the tenant whose stored plan limits apply.
    * @returns the argv prefix, or undefined when no limit is configured.
    */
-  private resourceScopeArgs(uid: number): string[] | undefined {
-    const { memoryMax, cpuQuota, tasksMax } = this.config
-    if (memoryMax === undefined && cpuQuota === undefined && tasksMax === undefined) return undefined
+  private async resourceScopeArgs(uid: number, userId: string): Promise<string[] | undefined> {
+    const user = await this.db.findUserById(userId)
+    const memoryMax = user?.memory_max ?? this.config.memoryMax
+    const cpuQuota = user?.cpu_quota ?? this.config.cpuQuota
+    const tasksMax = user?.tasks_max ?? this.config.tasksMax
+    if (memoryMax == null && cpuQuota == null && tasksMax == null) return undefined
     const args = ['--scope', '--quiet', '--collect', `--uid=${uid}`, `--gid=${uid}`]
     if (memoryMax !== undefined) args.push('-p', `MemoryMax=${memoryMax}`)
     if (cpuQuota !== undefined) args.push('-p', `CPUQuota=${cpuQuota}`)

@@ -21,11 +21,13 @@
  *   DSH_GUARD_LOG_MAX_AGE_DAYS session-log retention (default 30)
  *   DSH_GUARD_ORPHAN_MAX_AGE_DAYS orphan-root retention (default 30)
  *   DSH_GUARD_DRY_RUN          "1" reports without deleting
+ *   DSH_GUARD_PLAN_STORAGE_GB  JSON map of plan slug to storage ceiling in GB
  * @module dsh-server-login/scripts/disk-guard
  */
 
 import { readdirSync, rmSync, statfsSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { DatabaseSync } from 'node:sqlite'
 
 const dataRoot = process.env.DSH_GUARD_DATA_ROOT ?? '/var/lib/dsh-server-login'
 const warnPct = Number(process.env.DSH_GUARD_WARN_PCT ?? 80)
@@ -33,6 +35,7 @@ const criticalPct = Number(process.env.DSH_GUARD_CRITICAL_PCT ?? 90)
 const logMaxAgeDays = Number(process.env.DSH_GUARD_LOG_MAX_AGE_DAYS ?? 30)
 const orphanMaxAgeDays = Number(process.env.DSH_GUARD_ORPHAN_MAX_AGE_DAYS ?? 30)
 const dryRun = process.env.DSH_GUARD_DRY_RUN === '1'
+const planStorageGb = parsePlanStorage(process.env.DSH_GUARD_PLAN_STORAGE_GB)
 
 const DAY_MS = 24 * 60 * 60 * 1000
 const now = Date.now()
@@ -49,6 +52,50 @@ function rootUsagePct() {
   const free = stat.bavail * stat.bsize
   if (total === 0) return 0
   return Math.round(((total - free) / total) * 100)
+}
+
+/**
+ * Parse the plan-to-storage map.
+ * @param raw - JSON object keyed by plan slug.
+ * @returns the map, empty when unset or invalid.
+ */
+function parsePlanStorage(raw) {
+  if (raw === undefined || raw.trim() === '') return {}
+  try {
+    const parsed = JSON.parse(raw)
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) return {}
+    const map = {}
+    for (const [slug, value] of Object.entries(parsed)) {
+      const gigabytes = Number(value)
+      if (Number.isFinite(gigabytes) && gigabytes > 0) map[slug] = gigabytes
+    }
+    return map
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Read each user's plan slug from the orchestrator database.
+ *
+ * The guard only reports; it never writes to the database.
+ * @param dbPath - path to the orchestrator SQLite file.
+ * @returns a map of user id to plan slug.
+ */
+function readPlans(dbPath) {
+  const plans = new Map()
+  let db
+  try {
+    db = new DatabaseSync(dbPath, { readOnly: true })
+    for (const row of db.prepare('SELECT id, plan_slug FROM users').all()) {
+      if (typeof row.plan_slug === 'string') plans.set(row.id, row.plan_slug)
+    }
+  } catch {
+    // A missing or locked database only costs the storage comparison.
+  } finally {
+    try { db?.close() } catch {}
+  }
+  return plans
 }
 
 /**
@@ -103,9 +150,11 @@ function dirSize(dir) {
 const usage = rootUsagePct()
 report('disk-usage', { percent: usage, warnPct, criticalPct, dryRun })
 
+const plans = readPlans(join(dataRoot, 'server-login.db'))
 let prunedBytes = 0
 let tenantBytes = 0
 let orphans = 0
+let overStorage = 0
 
 let userDirs = []
 try {
@@ -120,7 +169,25 @@ for (const userId of userDirs) {
   const root = join(dataRoot, 'users', userId)
   const bytes = dirSize(root)
   tenantBytes += bytes
-  report('tenant-usage', { userId, megabytes: Math.round(bytes / (1024 * 1024)) })
+  const megabytes = Math.round(bytes / (1024 * 1024))
+  report('tenant-usage', { userId, megabytes })
+
+  // Storage ceiling is reported, not enforced: a tenant over its plan needs an
+  // operator decision (upgrade, cleanup, or a hard block), not a silent delete.
+  const plan = plans.get(userId)
+  const ceilingGb = plan === undefined ? undefined : planStorageGb[plan]
+  if (ceilingGb !== undefined) {
+    const usedGb = bytes / 1024 ** 3
+    if (usedGb > ceilingGb) {
+      overStorage += 1
+      report('tenant-over-storage', {
+        userId,
+        plan,
+        usedGb: Number(usedGb.toFixed(2)),
+        limitGb: ceilingGb,
+      })
+    }
+  }
 
   prunedBytes += pruneOldFiles(join(root, 'home', 'logs'))
 
@@ -139,6 +206,7 @@ report('cleanup', {
   prunedMegabytes: Math.round(prunedBytes / (1024 * 1024)),
   tenantMegabytes: Math.round(tenantBytes / (1024 * 1024)),
   orphanCandidates: orphans,
+  tenantsOverStorage: overStorage,
   dryRun,
 })
 

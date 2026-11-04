@@ -20,6 +20,7 @@ import type {
   User,
   UserRole,
   Workspace,
+  UserPlanLimits,
 } from './types.js'
 
 export interface DbAdapter {
@@ -30,6 +31,8 @@ export interface DbAdapter {
   findUserById(id: string): Promise<User | undefined>
   findUserBySupabaseSub(supabaseSub: string): Promise<User | undefined>
   setUserSupabaseSub(userId: string, supabaseSub: string): Promise<void>
+  /** Store the plan and its resolved resource limits for one user. */
+  setUserPlanLimits(userId: string, limits: UserPlanLimits): Promise<void>
   listPublicUsers(): Promise<PublicUser[]>
   countAdmins(): Promise<number>
   setUserRole(id: string, role: UserRole, approvedBy?: string): Promise<boolean>
