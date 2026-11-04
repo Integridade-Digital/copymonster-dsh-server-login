@@ -55,6 +55,16 @@ export interface ServerConfig {
   enablePatch: boolean
   /** Enable the loopback OUTPUT owner-match port guard (Linux + root). Local mode only. */
   portGuard: boolean
+  /**
+   * `MemoryMax` for each tenant DSH scope (systemd syntax, e.g. `2G`). Unset
+   * leaves the child unbounded; the scope wrapper also requires `cpuQuota` or
+   * `tasksMax` to be meaningful. Local mode only.
+   */
+  memoryMax?: string
+  /** `CPUQuota` for each tenant DSH scope (systemd syntax, e.g. `200%`). */
+  cpuQuota?: string
+  /** `TasksMax` for each tenant DSH scope; caps process and thread count. */
+  tasksMax?: number
   /** Secret used to encrypt per-user secrets at rest (from env or dataRoot/secret.key). */
   encryptionSecret: string
   /** Deployment mode (see {@link DeployMode}). */
@@ -147,6 +157,44 @@ const DEFAULT_BASE_UID = 100000
 const DEFAULT_BASE_DOMAIN = ''
 const DEFAULT_COOKIE_DOMAIN = ''
 const DEFAULT_ENABLE_PATCH = false
+
+/** systemd size syntax: a positive integer with an optional K/M/G/T suffix. */
+const MEMORY_MAX_PATTERN = /^[1-9][0-9]*[KMGT]?$/
+/** systemd CPU quota syntax: a positive percentage, optionally fractional. */
+const CPU_QUOTA_PATTERN = /^[1-9][0-9]*(\.[0-9]+)?%$/
+
+/**
+ * Validate one resource-limit value at load time.
+ * @param name - environment variable name, used in the failure message.
+ * @param value - raw configured value.
+ * @param pattern - accepted syntax.
+ * @returns the value, or undefined when unset.
+ * @throws Error when the value does not match the expected systemd syntax.
+ */
+function parseLimit(name: string, value: string | undefined, pattern: RegExp): string | undefined {
+  if (value === undefined || value.trim() === '') return undefined
+  const trimmed = value.trim()
+  if (!pattern.test(trimmed)) {
+    throw new Error(`${name} must match ${pattern.source}, got ${JSON.stringify(value)}`)
+  }
+  return trimmed
+}
+
+/**
+ * Validate a positive integer limit.
+ * @param name - environment variable name, used in the failure message.
+ * @param value - raw configured value.
+ * @returns the number, or undefined when unset.
+ * @throws Error when the value is not a positive integer.
+ */
+function parsePositiveInt(name: string, value: string | undefined): number | undefined {
+  if (value === undefined || value.trim() === '') return undefined
+  const parsed = Number(value)
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    throw new Error(`${name} must be a positive integer, got ${JSON.stringify(value)}`)
+  }
+  return parsed
+}
 const DEFAULT_DEPLOY_MODE: DeployMode = 'local'
 const DEFAULT_K8S_NAMESPACE = 'dsh'
 const DEFAULT_K8S_SERVICE_ACCOUNT = 'dsh-orchestrator'
@@ -259,6 +307,9 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     cookieDomain: overrides.cookieDomain ?? process.env.DSH_SERVER_LOGIN_COOKIE_DOMAIN ?? DEFAULT_COOKIE_DOMAIN,
     enablePatch: overrides.enablePatch ?? toBool(process.env.DSH_SERVER_LOGIN_ENABLE_PATCH, DEFAULT_ENABLE_PATCH),
     portGuard: overrides.portGuard ?? toBool(process.env.DSH_SERVER_LOGIN_PORT_GUARD, false),
+    memoryMax: parseLimit('DSH_SERVER_LOGIN_MEMORY_MAX', process.env.DSH_SERVER_LOGIN_MEMORY_MAX, MEMORY_MAX_PATTERN),
+    cpuQuota: parseLimit('DSH_SERVER_LOGIN_CPU_QUOTA', process.env.DSH_SERVER_LOGIN_CPU_QUOTA, CPU_QUOTA_PATTERN),
+    tasksMax: parsePositiveInt('DSH_SERVER_LOGIN_TASKS_MAX', process.env.DSH_SERVER_LOGIN_TASKS_MAX),
     encryptionSecret:
       overrides.encryptionSecret ?? resolveEncryptionSecret(dataRoot),
     deployMode,

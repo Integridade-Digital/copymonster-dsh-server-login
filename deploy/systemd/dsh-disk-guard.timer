@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the CopyMonster DSH disk guard daily
+
+[Timer]
+OnCalendar=*-*-* 04:15:00
+RandomizedDelaySec=15min
+Persistent=true
+Unit=dsh-disk-guard.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,19 @@
+[Unit]
+Description=CopyMonster DSH disk guard (usage report, log retention)
+Documentation=https://github.com/Integridade-Digital/copymonster-dsh-server-login
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /opt/copymonster/dsh-server-login/scripts/disk-guard.mjs
+Environment=DSH_GUARD_DATA_ROOT=/var/lib/dsh-server-login
+Environment=DSH_GUARD_WARN_PCT=80
+Environment=DSH_GUARD_CRITICAL_PCT=90
+Environment=DSH_GUARD_LOG_MAX_AGE_DAYS=30
+Environment=DSH_GUARD_ORPHAN_MAX_AGE_DAYS=30
+# A critical threshold exits 1 so `systemctl --failed` shows the host needs
+# attention; the journal keeps the structured report either way.
+SuccessExitStatus=0 2
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dsh-disk-guard

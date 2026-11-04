@@ -343,13 +343,43 @@ export class LocalSpawner implements Spawner {
         chmodSync(workspaceRoot(root), 0o700)
       } catch {}
     }
+    const resolvedCommand = resolveBinary(command, env.PATH)
+
+    // A configured resource limit runs the child inside a transient systemd
+    // scope, which also drops privileges via --uid/--gid. Without one, the
+    // existing setpriv prefix keeps the current behaviour.
+    const scopeArgs = this.resourceScopeArgs(uid)
+    if (scopeArgs !== undefined) {
+      const runner = resolveBinary('systemd-run', env.PATH)
+      return spawn(runner, [...scopeArgs, resolvedCommand, ...args], resolvedOptions)
+    }
+
     const prefix = this.config.spawnAsUserCommand.map((part) =>
       part.replaceAll('{UID}', String(uid)).replaceAll('{GID}', String(uid)),
     )
     let [asCommand = 'setpriv', ...asArgs] = prefix
     asCommand = resolveBinary(asCommand, env.PATH)
-    const resolvedCommand = resolveBinary(command, env.PATH)
     return spawn(asCommand, [...asArgs, resolvedCommand, ...args], resolvedOptions)
+  }
+
+  /**
+   * Build the `systemd-run --scope` prefix that caps one tenant's resources.
+   *
+   * The scope also performs the privilege drop (`--uid`/`--gid`), so it
+   * replaces the setpriv prefix rather than nesting inside it. `--collect`
+   * removes the transient unit when the child exits.
+   * @param uid - the tenant's Linux uid.
+   * @returns the argv prefix, or undefined when no limit is configured.
+   */
+  private resourceScopeArgs(uid: number): string[] | undefined {
+    const { memoryMax, cpuQuota, tasksMax } = this.config
+    if (memoryMax === undefined && cpuQuota === undefined && tasksMax === undefined) return undefined
+    const args = ['--scope', '--quiet', '--collect', `--uid=${uid}`, `--gid=${uid}`]
+    if (memoryMax !== undefined) args.push('-p', `MemoryMax=${memoryMax}`)
+    if (cpuQuota !== undefined) args.push('-p', `CPUQuota=${cpuQuota}`)
+    if (tasksMax !== undefined) args.push('-p', `TasksMax=${tasksMax}`)
+    args.push('--')
+    return args
   }
 
   private trackChild(userId: string, instance: Instance, child: ChildProcess): void {
