@@ -193,9 +193,14 @@ export class LocalUserFs implements UserFs {
     if (uid !== undefined && typeof process.getuid === 'function' && process.getuid() === 0) {
       try {
         grantUserRootPermissions(root, uid)
-        chmodSync(root, 0o755)
-        chmodSync(homeRoot(root), 0o755)
-        chmodSync(workspaceRoot(root), 0o755)
+        // The recursive pass above grants group/other read so the tenant's own
+        // DSH can traverse what the control plane created. The per-user root,
+        // its home and its workspace stay owner-only: the tenant owns them and
+        // runs as this uid, so 0700 is enough for it and stops another tenant
+        // from reading this one's sessions, credentials and workspace files.
+        chmodSync(root, 0o700)
+        chmodSync(homeRoot(root), 0o700)
+        chmodSync(workspaceRoot(root), 0o700)
       } catch {
         chownRecursiveSync(root, uid, uid)
         // The recursive pass grants group/other read; credential stores must stay

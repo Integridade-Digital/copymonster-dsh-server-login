@@ -329,10 +329,18 @@ export class LocalSpawner implements Spawner {
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
       try {
         const root = userRoot(this.config.dataRoot, userId)
-        chmodSync(this.config.dataRoot, 0o755)
-        chmodSync(join(this.config.dataRoot, 'users'), 0o755)
-        chmodSync(root, 0o755)
+        // The recursive grant widens the whole tree, so it runs first and the
+        // restrictive modes come after it; the reverse order reopened the
+        // owner-only directories on every spawn.
         grantUserRootPermissions(root, uid)
+        // Traversal without listing for the shared parents: a tenant uid must
+        // reach its own root, and must not enumerate the other tenants. The
+        // per-user root, its home and its workspace stay owner-only.
+        chmodSync(this.config.dataRoot, 0o711)
+        chmodSync(join(this.config.dataRoot, 'users'), 0o711)
+        chmodSync(root, 0o700)
+        chmodSync(homeRoot(root), 0o700)
+        chmodSync(workspaceRoot(root), 0o700)
       } catch {}
     }
     const prefix = this.config.spawnAsUserCommand.map((part) =>
