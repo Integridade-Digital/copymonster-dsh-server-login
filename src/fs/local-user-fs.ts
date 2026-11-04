@@ -11,6 +11,7 @@ import {
   chmodSync,
   cpSync,
   existsSync,
+  mkdirSync,
   readdirSync,
   readFileSync,
   realpathSync,
@@ -59,6 +60,32 @@ function chownRecursiveSync(targetPath: string, uid: number, gid: number): void 
 
 const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
 const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
+
+/** Shared workspace sandbox the tenant DSH writes under, unless configured. */
+const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
+
+/**
+ * Prepare the shared workspace sandbox for tenant uids.
+ *
+ * The sandbox lives at `<dir>/<tenantId>/<userId>/workspaces` and is created by
+ * the tenant's own DSH process, which runs as that tenant's uid, while the
+ * parent directory is created by the root control plane. Without a writable
+ * parent the tenant fails with `EACCES` on its first workspace. The sticky
+ * world-writable mode gives the directory `/tmp` semantics: every tenant
+ * creates its own entry and the sticky bit stops one tenant from removing
+ * another's. Tenant ids are UUIDs, so a tenant cannot address another's entry.
+ * @param dataRoot - the shared sandbox root to prepare.
+ */
+function ensureSharedSandboxRoot(dataRoot: string): void {
+  mkdirSync(dataRoot, { recursive: true, mode: 0o1777 })
+  chmodSync(dataRoot, 0o1777)
+  for (const entry of readdirSync(dataRoot, { withFileTypes: true })) {
+    if (!entry.isDirectory()) continue
+    try {
+      chmodSync(join(dataRoot, entry.name), 0o1777)
+    } catch {}
+  }
+}
 
 /** This package's root, used to expose `dsh-server-login/runtime` to tenants. */
 const PACKAGE_ROOT = fileURLToPath(new URL('../../', import.meta.url))
@@ -115,6 +142,14 @@ export class LocalUserFs implements UserFs {
     ensureDir(homeRoot(root))
     ensureDir(workspaceRoot(root))
     ensureDir(join(workspaceRoot(root), 'workspace'))
+
+    // The workspace sandbox sits outside this per-user root, so the tenant uid
+    // needs the shared root prepared before its DSH can create a workspace.
+    if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      try {
+        ensureSharedSandboxRoot(process.env.COPYMONSTER_DATA_DIR ?? DEFAULT_COPYMONSTER_DATA_DIR)
+      } catch {}
+    }
 
     // Provision the resident web profile so the per-user DSH can boot without
     // missing node_modules. Check known template profile locations.
