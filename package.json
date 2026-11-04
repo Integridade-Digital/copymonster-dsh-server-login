@@ -70,10 +70,12 @@
     "@supabase/supabase-js": "^2.118.0",
     "better-sqlite3": "^11.10.0",
     "fastify": "^5.0.0",
+    "js-yaml": "^5.5.0",
     "pg": "^8.23.0"
   },
   "devDependencies": {
     "@types/better-sqlite3": "^7.6.11",
+    "@types/js-yaml": "^4.0.9",
     "@types/node": "^22.10.0",
     "@types/pg": "^8.23.1",
     "typescript": "^5.7.0"

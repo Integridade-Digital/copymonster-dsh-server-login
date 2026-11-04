@@ -23,6 +23,7 @@ import { mkdir, writeFile } from 'node:fs/promises'
 import { stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { dump as dumpYaml, load as loadYaml } from 'js-yaml'
 import { PathEscapeError, resolveWithinRoot, safeFilename } from '../web/middleware/fs-guard.js'
 import { listInstalledPlugins, type PluginInfo } from './plugins.js'
 import { UserFsError, type UserFs } from './user-fs.js'
@@ -63,6 +64,71 @@ const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
 
 /** Shared workspace sandbox the tenant DSH writes under, unless configured. */
 const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
+
+/**
+ * Credential store the platform operator configures once, read at provisioning
+ * so every tenant reaches the same provider. The file holds `refs` (plaintext
+ * `NAME: value` pairs the harness resolves `apiKeyEnv` from) and `records`
+ * (per-tenant grants) — only `refs` are shared.
+ */
+const DEFAULT_GLOBAL_CREDENTIALS = '/root/.dsh/.credentials.yaml'
+
+/** Shape of a harness credential store, as far as provisioning reads it. */
+interface CredentialStore {
+  version?: number
+  refs?: Record<string, string>
+  records?: Record<string, unknown>
+}
+
+/**
+ * Merge the operator's provider credentials into one tenant's store.
+ *
+ * The operator's `refs` win: the Models surface is admin-only, so a tenant
+ * cannot choose a provider, and a stale per-tenant key would silently override
+ * the one the admin configured. The tenant's own `records` are preserved.
+ * @param home - the tenant's DSH home directory.
+ */
+function seedGlobalCredentials(home: string): void {
+  const source = process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS ?? DEFAULT_GLOBAL_CREDENTIALS
+  if (!existsSync(source)) return
+
+  let shared: CredentialStore
+  try {
+    const parsed: unknown = loadYaml(readFileSync(source, 'utf8'))
+    if (parsed === null || typeof parsed !== 'object') return
+    shared = parsed as CredentialStore
+  } catch (error) {
+    warnProvisioning('read global credentials', source, error)
+    return
+  }
+
+  const refs = shared.refs
+  if (refs === undefined || typeof refs !== 'object') return
+
+  const target = join(home, '.credentials.yaml')
+  let tenant: CredentialStore = {}
+  if (existsSync(target)) {
+    try {
+      const parsed: unknown = loadYaml(readFileSync(target, 'utf8'))
+      if (parsed !== null && typeof parsed === 'object') tenant = parsed as CredentialStore
+    } catch (error) {
+      warnProvisioning('read tenant credentials', target, error)
+      return
+    }
+  }
+
+  const merged: CredentialStore = {
+    version: tenant.version ?? shared.version ?? 1,
+    refs: { ...(tenant.refs ?? {}), ...refs },
+    ...(tenant.records === undefined ? {} : { records: tenant.records }),
+  }
+
+  try {
+    writeFileSync(target, dumpYaml(merged, { lineWidth: 120 }), { mode: 0o600 })
+  } catch (error) {
+    warnProvisioning('write tenant credentials', target, error)
+  }
+}
 
 /**
  * Prepare the shared workspace sandbox for tenant uids.
@@ -202,6 +268,9 @@ export class LocalUserFs implements UserFs {
     // Always ensure the tenant's web profile includes the CopyMonster bundle
     const userPackageJson = join(userProfile, 'package.json')
     ensureCopyMonsterBundle(userPackageJson)
+
+    // The operator configures the provider once; every tenant consumes it.
+    seedGlobalCredentials(homeRoot(root))
 
     // The roots were created by the (possibly root) control plane; the DSH child
     // runs as the user's own uid and must be able to traverse + write them.
