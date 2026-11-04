@@ -27,6 +27,12 @@ export interface Instance {
   patch?: string
   /** Parsed from the child's readiness line for the browser-auth exchange. */
   authToken?: string
+  /**
+   * Transient systemd scope holding this child, when resource limits are on.
+   * Stopping the scope is what actually ends the tenant: killing the
+   * `systemd-run` wrapper leaves the scope's process alive.
+   */
+  scopeUnit?: string
 }
 
 /** Thrown when a user already has a running main DSH. */

@@ -1,0 +1,8 @@
+#!/bin/sh
+# CopyMonster DSH entry for the orchestrator.
+#
+# The harness bin imports workspace packages that resolve from the checkout, so
+# copying `apps/cli/lib/bin.js` out of the tree breaks module resolution. This
+# wrapper runs the built bin in place instead; the tenant uid reaches it because
+# /root is mode 0711 and the wrapper clears the supplementary groups.
+exec /usr/bin/node /root/copymonster-launch/apps/cli/lib/bin.js "$@"

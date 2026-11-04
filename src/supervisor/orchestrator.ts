@@ -296,7 +296,8 @@ export class LocalSpawner implements Spawner {
       }
     }
 
-    const child = await this.spawnAsUser(userId, command, [...args, ...launchArgs], { cwd: folder, env })
+    const child = await this.spawnAsUser(userId, role, command, [...args, ...launchArgs], { cwd: folder, env })
+    if (this.config.resourceScopes) instance.scopeUnit = this.scopeUnitName(userId, role)
     this.trackChild(userId, instance, child)
     return instance
   }
@@ -304,6 +305,7 @@ export class LocalSpawner implements Spawner {
   /** Spawn the child, optionally through the account-level setuid wrapper. */
   private async spawnAsUser(
     userId: string,
+    role: InstanceRole,
     command: string,
     args: string[],
     options: { cwd: string; env: Record<string, string> },
@@ -350,21 +352,23 @@ export class LocalSpawner implements Spawner {
       }
     }
     const resolvedCommand = resolveBinary(command, env.PATH)
-
-    // A configured resource limit runs the child inside a transient systemd
-    // scope, which also drops privileges via --uid/--gid. Without one, the
-    // existing setpriv prefix keeps the current behaviour.
-    const scopeArgs = await this.resourceScopeArgs(uid, userId)
-    if (scopeArgs !== undefined) {
-      const runner = resolveBinary('systemd-run', env.PATH)
-      return spawn(runner, [...scopeArgs, resolvedCommand, ...args], resolvedOptions)
-    }
-
     const prefix = this.config.spawnAsUserCommand.map((part) =>
       part.replaceAll('{UID}', String(uid)).replaceAll('{GID}', String(uid)),
     )
     let [asCommand = 'setpriv', ...asArgs] = prefix
     asCommand = resolveBinary(asCommand, env.PATH)
+
+    // A configured resource limit wraps the whole privilege-drop in a transient
+    // systemd scope. The scope runs as the orchestrator's own user: systemd
+    // cannot set `SupplementaryGroups` on a scope unit, and inheriting the
+    // caller's groups would leave the tenant inside group root, which both
+    // denies it /root and hands it group-root access.
+    const scopeArgs = await this.resourceScopeArgs(userId, role)
+    if (scopeArgs !== undefined) {
+      const runner = resolveBinary('systemd-run', env.PATH)
+      return spawn(runner, [...scopeArgs, asCommand, ...asArgs, resolvedCommand, ...args], resolvedOptions)
+    }
+
     return spawn(asCommand, [...asArgs, resolvedCommand, ...args], resolvedOptions)
   }
 
@@ -372,22 +376,32 @@ export class LocalSpawner implements Spawner {
    * Build the `systemd-run --scope` prefix that caps one tenant's resources.
    *
    * The plan-derived values stored on the user row win; the global config is
-   * the fallback for a tenant whose plan is unknown. The scope also performs
-   * the privilege drop (`--uid`/`--gid`), so it replaces the setpriv prefix
-   * rather than nesting inside it, and `--collect` removes the transient unit
-   * when the child exits.
-   * @param uid - the tenant's Linux uid.
+   * the fallback for a tenant whose plan is unknown. Only the limits are set
+   * here: the caller composes this prefix with the setpriv prefix, so the
+   * scope never changes the child's identity or groups. `--collect` removes
+   * the transient unit when the child exits.
    * @param userId - the tenant whose stored plan limits apply.
    * @returns the argv prefix, or undefined when no limit is configured.
    */
-  private async resourceScopeArgs(uid: number, userId: string): Promise<string[] | undefined> {
+  /**
+   * Name the transient scope after the tenant and role.
+   * @param userId - tenant the scope belongs to.
+   * @param role - main or watchdog, so a restart never collides with a live scope.
+   * @returns a systemd-safe unit name.
+   */
+  private scopeUnitName(userId: string, role: InstanceRole): string {
+    const safe = userId.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 48)
+    return `copymonster-${role}-${safe}.scope`
+  }
+
+  private async resourceScopeArgs(userId: string, role: InstanceRole): Promise<string[] | undefined> {
     if (!this.config.resourceScopes) return undefined
     const user = await this.db.findUserById(userId)
     const memoryMax = user?.memory_max ?? this.config.memoryMax
     const cpuQuota = user?.cpu_quota ?? this.config.cpuQuota
     const tasksMax = user?.tasks_max ?? this.config.tasksMax
     if (memoryMax == null && cpuQuota == null && tasksMax == null) return undefined
-    const args = ['--scope', '--quiet', '--collect', `--uid=${uid}`, `--gid=${uid}`]
+    const args = ['--scope', '--quiet', '--collect', `--unit=${this.scopeUnitName(userId, role)}`]
     if (memoryMax !== undefined) args.push('-p', `MemoryMax=${memoryMax}`)
     if (cpuQuota !== undefined) args.push('-p', `CPUQuota=${cpuQuota}`)
     if (tasksMax !== undefined) args.push('-p', `TasksMax=${tasksMax}`)
@@ -471,6 +485,13 @@ export class LocalSpawner implements Spawner {
 
   private killInstance(userId: string, instance: Instance): void {
     instance.status = 'stopped'
+    // With resource scopes the tenant lives inside a transient unit, and
+    // killing the `systemd-run` wrapper does not end it: stop the unit.
+    if (instance.scopeUnit !== undefined) {
+      try {
+        execFileSync('systemctl', ['stop', instance.scopeUnit], { stdio: 'ignore', timeout: 5_000 })
+      } catch {}
+    }
     const child = this.children.get(instance.id)
     if (child === undefined) return
     child.kill('SIGTERM')
