@@ -53,6 +53,11 @@ export interface ServerConfig {
   cookieDomain: string
   /** Whether to pass `--patch` to child DSHs (needs a dsh CLI that supports it). */
   enablePatch: boolean
+  /**
+   * Base64 SPKI Ed25519 public key the tenant verifies signed identities with.
+   * Filled from the control plane's key at startup; empty disables the handshake.
+   */
+  identityPublicKey: string
   /** Enable the loopback OUTPUT owner-match port guard (Linux + root). Local mode only. */
   portGuard: boolean
   /**
@@ -372,6 +377,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     baseDomain: overrides.baseDomain ?? process.env.DSH_SERVER_LOGIN_BASE_DOMAIN ?? DEFAULT_BASE_DOMAIN,
     cookieDomain: overrides.cookieDomain ?? process.env.DSH_SERVER_LOGIN_COOKIE_DOMAIN ?? DEFAULT_COOKIE_DOMAIN,
     enablePatch: overrides.enablePatch ?? toBool(process.env.DSH_SERVER_LOGIN_ENABLE_PATCH, DEFAULT_ENABLE_PATCH),
+    identityPublicKey: '',
     portGuard: overrides.portGuard ?? toBool(process.env.DSH_SERVER_LOGIN_PORT_GUARD, false),
     memoryMax: parseLimit('DSH_SERVER_LOGIN_MEMORY_MAX', process.env.DSH_SERVER_LOGIN_MEMORY_MAX, MEMORY_MAX_PATTERN),
     cpuQuota: parseLimit('DSH_SERVER_LOGIN_CPU_QUOTA', process.env.DSH_SERVER_LOGIN_CPU_QUOTA, CPU_QUOTA_PATTERN),

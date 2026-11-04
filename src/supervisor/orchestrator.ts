@@ -265,6 +265,11 @@ export class LocalSpawner implements Spawner {
       HOME: workspace,
       // DSH's own state (profiles/sessions/credentials) stays in `home`.
       DSH_HOME: home,
+      // Public half of the control plane's identity key: the tenant verifies
+      // the signed caller identity but cannot mint one.
+      ...(this.config.identityPublicKey === ''
+        ? {}
+        : { DSH_IDENTITY_PUBLIC_KEY: this.config.identityPublicKey }),
       // Each user's own key; omit entirely when unset so the harness reports
       // "no key" instead of a header-hostile value.
       ...(apiKey !== null ? { DEEPSEEK_API_KEY: apiKey } : {}),

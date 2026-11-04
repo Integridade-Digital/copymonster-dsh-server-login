@@ -66,6 +66,12 @@ interface MainAppSession {
   username: string
   /** Plan slug the main app reported; absent when it could not read it. */
   planSlug?: string
+  /** Tenant id the caller acts within, signed into the session for the tenant handshake. */
+  tenantId?: string
+  /** Role inside the tenant. */
+  role?: 'owner' | 'admin' | 'member'
+  /** Platform-operator flag. */
+  isAdmin?: boolean
 }
 
 type ExchangeResult =
@@ -127,9 +133,21 @@ async function exchangeSupabaseSession(
   }
   const planSlug = record.plan_slug
   const validPlan = typeof planSlug === 'string' && /^[a-z0-9-]{1,32}$/.test(planSlug)
+  const tenantId = record.tenant_id
+  const validTenant = typeof tenantId === 'string'
+    && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(tenantId)
+  const role = record.role
+  const validRole = role === 'owner' || role === 'admin' || role === 'member'
   return {
     ok: true,
-    session: { sub, username, ...(validPlan ? { planSlug } : {}) },
+    session: {
+      sub,
+      username,
+      ...(validPlan ? { planSlug } : {}),
+      ...(validTenant ? { tenantId } : {}),
+      ...(validRole ? { role } : {}),
+      isAdmin: record.is_admin === true,
+    },
   }
 }
 
@@ -139,6 +157,7 @@ async function issueSession(
   request: FastifyRequest,
   reply: FastifyReply,
   user: User,
+  identity: Pick<MainAppSession, 'tenantId' | 'role' | 'isAdmin'>,
 ): Promise<void> {
   const now = Date.now()
   const jti = newSessionToken()
@@ -149,10 +168,16 @@ async function issueSession(
     ip: request.ip,
     userAgent: request.headers['user-agent'],
   })
-  const token = signSessionCookie(
-    { u: user.id, s: user.supabase_sub, n: user.username, jti, iat: Math.floor(now / 1000) },
-    app.config.sessionSecret,
-  )
+  const token = signSessionCookie({
+    u: user.id,
+    s: user.supabase_sub,
+    n: user.username,
+    jti,
+    iat: Math.floor(now / 1000),
+    ...(identity.tenantId === undefined ? {} : { t: identity.tenantId }),
+    ...(identity.role === undefined ? {} : { r: identity.role }),
+    ...(identity.isAdmin === undefined ? {} : { a: identity.isAdmin }),
+  }, app.config.sessionSecret)
   reply.header(
     'set-cookie',
     sessionCookie(token, app.config.sessionTtlSeconds, app.config.secureCookies, app.config.cookieDomain),
@@ -251,7 +276,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         })
       }
 
-      await issueSession(app, request, reply, user)
+      await issueSession(app, request, reply, user, exchanged.session)
       await app.db.audit(user.id, 'sso_login', null)
 
       const subUrl =
@@ -287,7 +312,9 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       if (user.role === 'pending') return reply.code(403).send({ error: 'pending_review' })
       if (user.role === 'disabled') return reply.code(403).send({ error: 'disabled' })
 
-      await issueSession(app, request, reply, user)
+      // Password login carries no Supabase tenant identity; a tenant subdomain
+      // requires the SSO exchange, which signs one.
+      await issueSession(app, request, reply, user, {})
       await app.db.audit(user.id, 'login', null)
       const subUrl =
         app.config.baseDomain !== ''

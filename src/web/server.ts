@@ -16,6 +16,7 @@ import { decrypt, deriveKey } from '../crypto.js'
 import { hashUid } from '../isolation.js'
 import { LocalSpawner } from '../supervisor/orchestrator.js'
 import { K8sSpawner } from '../supervisor/k8s-spawner.js'
+import { createIdentitySigner, type IdentitySigner } from '../identity.js'
 import { registerDshProxy } from '../supervisor/proxy.js'
 import type { Spawner } from '../supervisor/spawner.js'
 import { rateLimit } from './middleware/rate-limit.js'
@@ -32,6 +33,7 @@ declare module 'fastify' {
     config: ServerConfig
     supervisor: Spawner
     userFs: UserFs
+    identity: IdentitySigner
   }
   interface FastifyRequest {
     user: PublicUser | null
@@ -46,6 +48,8 @@ const webRoot = join(dirname(fileURLToPath(import.meta.url)), '../../web')
  * @param config - resolved runtime configuration.
  */
 export async function buildServer(config: ServerConfig): Promise<FastifyInstance> {
+  const identity = createIdentitySigner(config.dataRoot)
+  config.identityPublicKey = identity.publicKey
   const db = await createDbAdapter(config)
   const encryptionKey = deriveKey(config.encryptionSecret)
   const resolveApiKey = async (userId: string): Promise<string | null> => {
@@ -77,6 +81,7 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   app.decorate('config', config)
   app.decorate('supervisor', supervisor)
   app.decorate('userFs', userFs)
+  app.decorate('identity', identity)
   app.decorateRequest('user', null)
 
   // Reverse proxy (subdomain + legacy subpath). Registered first so its global

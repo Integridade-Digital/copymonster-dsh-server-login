@@ -24,6 +24,12 @@ export interface SessionClaims {
   jti: string
   /** Issue time, epoch seconds. */
   iat: number
+  /** Tenant id the caller acts within, signed for the tenant identity handshake. */
+  t?: string
+  /** Role inside the tenant, signed for the tenant identity handshake. */
+  r?: 'owner' | 'admin' | 'member'
+  /** Platform-operator flag, signed for the tenant identity handshake. */
+  a?: boolean
 }
 
 function mac(payload: string, secret: string): string {
@@ -39,7 +45,10 @@ function isClaims(value: unknown): value is SessionClaims {
     typeof claims.n === 'string' &&
     typeof claims.jti === 'string' &&
     typeof claims.iat === 'number' &&
-    Number.isFinite(claims.iat)
+    Number.isFinite(claims.iat) &&
+    (claims.t === undefined || typeof claims.t === 'string') &&
+    (claims.r === undefined || claims.r === 'owner' || claims.r === 'admin' || claims.r === 'member') &&
+    (claims.a === undefined || typeof claims.a === 'boolean')
   )
 }
 

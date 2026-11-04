@@ -16,7 +16,9 @@ import { dirname, join } from 'node:path'
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import { Agent, request as httpRequest, type IncomingHttpHeaders, type IncomingMessage } from 'node:http'
 import { connect } from 'node:net'
-import { requireAuth, resolveSessionUser } from '../web/middleware/authn.js'
+import { requireAuth, resolveSessionClaims, resolveSessionUser } from '../web/middleware/authn.js'
+import type { SessionClaims } from '../web/session-cookie.js'
+import { IDENTITY_TTL_MS } from '../identity.js'
 import type { Endpoint } from './spawner.js'
 import { renderPatch } from './patch.js'
 
@@ -38,12 +40,15 @@ const STRIP_HEADERS = new Set([
   'x-forwarded-for',
   'x-forwarded-host',
   'x-forwarded-proto',
+  // Never let a browser supply the identity the proxy signs itself.
+  'x-dsh-identity',
 ])
 
 export function buildUpstreamHeaders(
   headers: IncomingHttpHeaders,
   port: number,
   publicHost?: string,
+  identity?: string,
 ): Record<string, string | string[]> {
   const out: Record<string, string | string[]> = {}
   for (const [key, value] of Object.entries(headers)) {
@@ -60,6 +65,7 @@ export function buildUpstreamHeaders(
     out['x-forwarded-host'] = publicHost
     out['x-forwarded-proto'] = 'https'
   }
+  if (identity !== undefined) out['x-dsh-identity'] = identity
   return out
 }
 
@@ -91,7 +97,30 @@ function realOrigin(headers: IncomingHttpHeaders): string | undefined {
 }
 
 /** A subdomain resolution: a tunnelable endpoint, an error to return, or null (not a subdomain). */
-type SubdomainAccess = { endpoint: Endpoint; userId: string; publicHost: string } | { error: string; code: number } | null
+type SubdomainAccess =
+  | { endpoint: Endpoint; userId: string; publicHost: string; identity: string }
+  | { error: string; code: number }
+  | null
+
+/**
+ * Sign the caller identity the tenant verifies, or undefined when the session
+ * predates the handshake and the caller must sign in again.
+ * @param app - server carrying the signing key.
+ * @param claims - verified session claims.
+ * @returns the signed identity header value.
+ */
+function signIdentity(app: FastifyInstance, claims: SessionClaims | undefined): string | undefined {
+  if (claims === undefined || claims.t === undefined || claims.r === undefined) return undefined
+  const now = Date.now()
+  return app.identity.sign({
+    sub: claims.s ?? claims.u,
+    tenant: claims.t,
+    role: claims.r,
+    isAdmin: claims.a === true,
+    iat: now,
+    exp: now + IDENTITY_TTL_MS,
+  })
+}
 
 /**
  * The client-facing host, preferring `X-Forwarded-Host`. The control plane sits
@@ -127,9 +156,15 @@ async function resolveSubdomainAccess(
   if (user.username.toLowerCase() !== slug) {
     return { error: 'forbidden', code: 403 }
   }
+  const identity = signIdentity(app, resolveSessionClaims(app, cookieHeader))
+  if (identity === undefined) {
+    // A session issued before the identity handshake cannot be signed; the
+    // caller signs in again rather than falling back to the local owner.
+    return { error: 'reauthentication-required', code: 401 }
+  }
   const endpoint = await app.supervisor.endpointFor(user.id)
   if (endpoint === undefined) return { error: 'not_running', code: 404 }
-  return { endpoint, userId: user.id, publicHost: `${slug}.${app.config.baseDomain}` }
+  return { endpoint, userId: user.id, publicHost: `${slug}.${app.config.baseDomain}`, identity }
 }
 
 function proxyHttp(
@@ -140,6 +175,7 @@ function proxyHttp(
   rewritePrefix?: string,
   rewriteLoopbackLocation = false,
   publicHost?: string,
+  identity?: string,
 ): void {
   reply.hijack()
   const attempt = (retry: boolean): void => {
@@ -155,7 +191,7 @@ function proxyHttp(
         agent: retry ? false : upstreamAgent,
         // Host header stays loopback for the DSH trust fence; the TCP target host
         // is endpoint.host above. k8s mode overrides the header port separately.
-        headers: buildUpstreamHeaders(request.headers, endpoint.port, publicHost),
+        headers: buildUpstreamHeaders(request.headers, endpoint.port, publicHost, identity),
       },
       (upRes: IncomingMessage) => {
         const headers = { ...upRes.headers }
@@ -236,7 +272,12 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     const prefix = `/u/${slug}/dsh`
     const rawUrl = request.raw.url ?? '/'
     const targetPath = rawUrl.startsWith(prefix) ? rawUrl.slice(prefix.length) || '/' : rawUrl
-    proxyHttp(request, reply, endpoint, targetPath, prefix, app.config.deployMode === 'local')
+    const identity = signIdentity(app, resolveSessionClaims(app, request.headers.cookie))
+    if (identity === undefined) {
+      reply.code(401).send({ error: 'reauthentication-required' })
+      return
+    }
+    proxyHttp(request, reply, endpoint, targetPath, prefix, app.config.deployMode === 'local', undefined, identity)
   })
 
   // Per-user subdomain: HTTP (intercept before normal routing).
@@ -281,7 +322,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
       reply.code(access.code).send({ error: access.error })
       return
     }
-    proxyHttp(request, reply, access.endpoint, request.raw.url ?? '/', undefined, app.config.deployMode === 'local', access.publicHost)
+    proxyHttp(request, reply, access.endpoint, request.raw.url ?? '/', undefined, app.config.deployMode === 'local', access.publicHost, access.identity)
   })
 
   // Per-user subdomain: WebSocket upgrade tunnel. Auth is async (DB lookup), so
@@ -305,6 +346,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
         lines.push(`Host: 127.0.0.1:${access.endpoint.port}`)
         lines.push(`X-Forwarded-Host: ${access.publicHost}`)
         lines.push('X-Forwarded-Proto: https')
+        lines.push(`X-Dsh-Identity: ${access.identity}`)
         upstream.write(lines.join('\r\n') + '\r\n\r\n')
         if (head !== undefined && head.length > 0) upstream.write(head)
         socket.pipe(upstream)

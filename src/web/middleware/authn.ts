@@ -12,7 +12,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify'
 import type { User } from '../../db/types.js'
 import { toPublicUser } from '../../db/types.js'
 import { hashSessionToken, parseCookie } from '../auth.js'
-import { verifySessionCookie } from '../session-cookie.js'
+import { verifySessionCookie, type SessionClaims } from '../session-cookie.js'
 
 /**
  * Resolve a `Cookie` header into the authenticated user.
@@ -24,19 +24,32 @@ import { verifySessionCookie } from '../session-cookie.js'
  * @param cookieHeader - raw `Cookie` request header.
  * @returns the user, or undefined when the cookie is absent or invalid.
  */
-export async function resolveSessionUser(
-  app: Pick<FastifyInstance, 'db' | 'config'>,
+/**
+ * Verify the signed `sid` cookie and return its claims without a DB lookup.
+ * @param app - server carrying the session configuration.
+ * @param cookieHeader - raw `Cookie` request header.
+ * @returns the verified claims, or undefined when the cookie is absent or invalid.
+ */
+export function resolveSessionClaims(
+  app: Pick<FastifyInstance, 'config'>,
   cookieHeader: string | undefined,
-): Promise<User | undefined> {
+): SessionClaims | undefined {
   const token = parseCookie(cookieHeader, 'sid')
   if (token === undefined) return undefined
-  const claims = verifySessionCookie(
+  return verifySessionCookie(
     token,
     app.config.sessionSecret,
     Math.floor(Date.now() / 1000),
     app.config.sessionTtlSeconds,
-  )
-  if (claims === null) return undefined
+  ) ?? undefined
+}
+
+export async function resolveSessionUser(
+  app: Pick<FastifyInstance, 'db' | 'config'>,
+  cookieHeader: string | undefined,
+): Promise<User | undefined> {
+  const claims = resolveSessionClaims(app, cookieHeader)
+  if (claims === undefined) return undefined
 
   const row = await app.db.findSessionWithUser(hashSessionToken(claims.jti))
   if (row === undefined || row.expiresAt <= Date.now()) return undefined

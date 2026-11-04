@@ -441,6 +441,9 @@ export class K8sSpawner implements Spawner {
             env: [
               { name: 'HOME', value: ws },
               { name: 'DSH_HOME', value: home },
+              ...(this.config.identityPublicKey === ''
+                ? []
+                : [{ name: 'DSH_IDENTITY_PUBLIC_KEY', value: this.config.identityPublicKey }]),
               ...apiKeyEnv(userId, apiKey),
             ],
             volumeMounts: [
