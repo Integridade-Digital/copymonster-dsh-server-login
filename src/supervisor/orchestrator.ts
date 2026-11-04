@@ -37,9 +37,6 @@ export { AlreadyRunningError, type Instance, type InstanceRole, type InstanceSta
  * missing task; executes any post-restart command from the handoff path. */
 const WATCHDOG_TASK = 'Read DSH_SERVER_LOGIN_HANDOFF_PATH. If it contains a JSON {"command": ...}, run that command. Then exit.'
 
-/** Platform billing credentials the tenant web process needs to serve checkout. */
-const STRIPE_ENV_KEYS = ['STRIPE_SECRET_KEY', 'STRIPE_WEBHOOK_SECRET'] as const
-
 /**
  * Local backend: owns the lifecycle of per-user DSH process pairs via
  * child_process. State is in-memory. Implements {@link Spawner}.
@@ -312,14 +309,6 @@ export class LocalSpawner implements Spawner {
     }
     if (isMain) {
       env.DSH_SERVER_LOGIN_PORT = String(port)
-      // Billing is served by the tenant's web process, which the browser
-      // reaches on the tenant subdomain, so the checkout and portal routes need
-      // the platform's Stripe credentials. The headless watchdog serves no
-      // browser routes and never receives them.
-      for (const key of STRIPE_ENV_KEYS) {
-        const value = process.env[key]
-        if (value !== undefined && value !== '') env[key] = value
-      }
     }
 
     const child = await this.spawnAsUser(userId, role, command, [...args, ...launchArgs], { cwd: folder, env })
