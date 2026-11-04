@@ -83,8 +83,16 @@ function ensureSharedSandboxRoot(dataRoot: string): void {
     if (!entry.isDirectory()) continue
     try {
       chmodSync(join(dataRoot, entry.name), 0o1777)
-    } catch {}
+    } catch (error) {
+      warnProvisioning('prepare shared sandbox', join(dataRoot, entry.name), error)
+    }
   }
+}
+
+/** Log one provisioning failure that would otherwise pass silently. */
+function warnProvisioning(step: string, target: string, error: unknown): void {
+  const detail = error instanceof Error ? error.message : String(error)
+  console.warn(`[provisioning] ${step} failed for ${target}: ${detail}`)
 }
 
 /** This package's root, used to expose `dsh-server-login/runtime` to tenants. */
@@ -104,7 +112,11 @@ function linkPackageIntoUserRoot(root: string, name: string, target: string): vo
   if (existsSync(link)) return
   try {
     symlinkSync(target, link, 'dir')
-  } catch {}
+  } catch (error) {
+    // Without this link the tenant cannot resolve `dsh-server-login/runtime`
+    // and its child fails to boot, so the failure must reach the journal.
+    warnProvisioning('link package', link, error)
+  }
 }
 
 /** Restrict a file to its owner when the recursive permission pass widened it. */
@@ -131,7 +143,9 @@ function ensureCopyMonsterBundle(packageJsonPath: string): void {
     }
     manifest.dsh.profile.bundles = bundles
     writeFileSync(packageJsonPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
-  } catch {}
+  } catch (error) {
+    warnProvisioning('ensure CopyMonster bundle', packageJsonPath, error)
+  }
 }
 
 export class LocalUserFs implements UserFs {
@@ -176,7 +190,9 @@ export class LocalUserFs implements UserFs {
     if (templateModules !== undefined && existsSync(templateModules) && !existsSync(userModules)) {
       try {
         symlinkSync(realpathSync(templateModules), userModules, 'dir')
-      } catch {}
+      } catch (error) {
+        warnProvisioning('share template node_modules', userModules, error)
+      }
     }
 
     // The supervisor patch mounts `dsh-server-login/runtime` in every child, and
@@ -201,7 +217,8 @@ export class LocalUserFs implements UserFs {
         chmodSync(root, 0o700)
         chmodSync(homeRoot(root), 0o700)
         chmodSync(workspaceRoot(root), 0o700)
-      } catch {
+      } catch (error) {
+        warnProvisioning('grant user root permissions', root, error)
         chownRecursiveSync(root, uid, uid)
         // The recursive pass grants group/other read; credential stores must stay
         // owner-only or the credentials plugin refuses to start.

@@ -1,0 +1,11 @@
+[Unit]
+Description=Probe the CopyMonster DSH host every five minutes
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+Unit=dsh-monitor.service
+
+[Install]
+WantedBy=timers.target

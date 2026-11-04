@@ -341,7 +341,12 @@ export class LocalSpawner implements Spawner {
         chmodSync(root, 0o700)
         chmodSync(homeRoot(root), 0o700)
         chmodSync(workspaceRoot(root), 0o700)
-      } catch {}
+      } catch (error) {
+        // A permission failure here leaves the tenant unable to read its own
+        // root, which surfaces later as an opaque EACCES inside the child.
+        const detail = error instanceof Error ? error.message : String(error)
+        console.warn(`[provisioning] prepare tenant root failed for ${userId}: ${detail}`)
+      }
     }
     const resolvedCommand = resolveBinary(command, env.PATH)
 

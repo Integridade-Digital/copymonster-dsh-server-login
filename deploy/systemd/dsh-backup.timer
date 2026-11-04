@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the CopyMonster DSH backup daily
+
+[Timer]
+OnCalendar=*-*-* 03:30:00
+RandomizedDelaySec=10min
+Persistent=true
+Unit=dsh-backup.service
+
+[Install]
+WantedBy=timers.target

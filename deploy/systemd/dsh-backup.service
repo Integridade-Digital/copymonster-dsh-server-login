@@ -1,0 +1,17 @@
+[Unit]
+Description=CopyMonster DSH backup (orchestrator database, tenant roots, secrets)
+Documentation=https://github.com/Integridade-Digital/copymonster-dsh-server-login
+After=local-fs.target
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/node /opt/copymonster/dsh-server-login/scripts/backup.mjs
+Environment=DSH_BACKUP_DIR=/var/backups/copymonster
+Environment=DSH_SERVER_LOGIN_DATA_ROOT=/var/lib/dsh-server-login
+Environment=DSH_BACKUP_RETAIN_DAILY=7
+Environment=DSH_BACKUP_RETAIN_MONTHLY_DAYS=30
+# Set SUPABASE_DB_URL here (or in an EnvironmentFile) to include the Supabase dump.
+#Environment=SUPABASE_DB_URL=postgresql://postgres:<password>@db.<ref>.supabase.co:5432/postgres
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=dsh-backup
