@@ -13,7 +13,7 @@
 import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
-import { chmodSync, chownSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
+import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import type { User } from '../db/types.js'
@@ -201,6 +201,32 @@ export class LocalSpawner implements Spawner {
   /** Stop every tracked process on shutdown. */
   async teardown(): Promise<void> {
     for (const userId of [...this.mains.keys(), ...this.watchdogs.keys()]) await this.stop(userId)
+    this.reapOrphanScopes()
+  }
+
+  /**
+   * Empty every tenant scope still alive, including ones this process did not
+   * spawn.
+   *
+   * A scope is a sibling of the service, not a child, so systemd's stop does
+   * not reach it. A tenant left over from a previous run keeps its proxied
+   * connections open, and `app.close()` then waits out the full stop timeout.
+   * @returns nothing; failures are ignored so shutdown always proceeds.
+   */
+  private reapOrphanScopes(): void {
+    if (!this.config.resourceScopes) return
+    let entries: string[]
+    try {
+      entries = readdirSync('/sys/fs/cgroup/system.slice')
+    } catch {
+      return
+    }
+    for (const entry of entries) {
+      if (!entry.startsWith('copymonster-') || !entry.endsWith('.scope')) continue
+      try {
+        writeFileSync(join('/sys/fs/cgroup/system.slice', entry, 'cgroup.kill'), '1')
+      } catch {}
+    }
   }
 
   /** No-op: local mode has no sidecar — the control plane owns the volume. */
