@@ -29,7 +29,9 @@ const ALLOWED_ENV = new Set([
   'DSH_SERVER_LOGIN_BASE_DOMAIN',
   'SUPABASE_URL',
   'SUPABASE_ANON_KEY',
-  'SUPABASE_SERVICE_ROLE_KEY',
+  // The service-role key is deliberately absent: a tenant DSH runs untrusted
+  // code, and every privileged read and write goes through a caller-scoped RPC
+  // that derives the tenant from auth.uid().
 ])
 
 export const DEFAULT_SYSTEM_PATH = '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'
