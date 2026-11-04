@@ -1,9 +1,9 @@
 <!DOCTYPE html>
-<html lang="pt-BR">
+<html lang="en">
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Preparando seu ambiente — CopyMonster</title>
+  <title>Preparing your environment — CopyMonster</title>
   <link rel="icon" href="/brand.png" />
   <style>
     :root {
@@ -206,8 +206,8 @@
   <div class="container">
     <img src="/brand.png" alt="CopyMonster" class="launch-logo" />
 
-    <h1>Preparando seu ambiente CopyMonster...</h1>
-    <p class="subtitle">Configurando seu workspace isolado e carregando o motor de Brand DNA.</p>
+    <h1>Preparing your CopyMonster environment...</h1>
+    <p class="subtitle">Setting up your isolated workspace and loading the Brand DNA engine.</p>
 
     <div class="spinner-wrap">
       <div class="spinner"></div>
@@ -216,22 +216,22 @@
     <div class="steps">
       <div class="step-item done" id="step-1">
         <div class="step-icon">✓</div>
-        <span>Sessão segura autenticada</span>
+        <span>Secure session authenticated</span>
       </div>
       <div class="step-item active" id="step-2">
         <div class="step-icon"></div>
-        <span>Alocando workspace dedicado e portas seguras...</span>
+        <span>Allocating dedicated workspace and secure ports...</span>
       </div>
       <div class="step-item" id="step-3">
         <div class="step-icon"></div>
-        <span>Carregando o motor CopyMonster e seus plugins...</span>
+        <span>Loading CopyMonster engine and plugins...</span>
       </div>
     </div>
 
-    <p class="footer-note">Isolamento total ativo • Ambiente dedicado • CopyMonster SaaS</p>
+    <p class="footer-note">Full isolation active • Dedicated environment • CopyMonster SaaS</p>
     <div class="launch-error" id="launch-error" role="alert" aria-live="assertive">
       <div id="launch-error-message"></div>
-      <button type="button" onclick="window.location.reload()">Tentar novamente</button>
+      <button type="button" onclick="window.location.reload()">Try again</button>
     </div>
   </div>
 
@@ -272,11 +272,11 @@
           clearTimeout(timeout);
         }
         if (res.status === 401 || res.status === 403) {
-          showFailure('Sua sessão expirou ou perdeu autorização. Entre novamente e abra o CopyMonster.');
+          showFailure('Your session expired or lost authorization. Sign in again and open CopyMonster.');
           return;
         }
         if (!res.ok) {
-          failureMessage = `O serviço de inicialização respondeu HTTP ${res.status}.`;
+          failureMessage = `The launch service answered HTTP ${res.status}.`;
         } else {
           consecutiveFailures = 0;
           if (data && data.running) {
@@ -289,30 +289,30 @@
             return;
           }
           if (data && data.status === 'crashed') {
-            const detail = data.instance && data.instance.lastError ? ` Detalhe: ${data.instance.lastError}` : '';
-            showFailure(`O processo do CopyMonster encerrou durante a inicialização.${detail}`);
+            const detail = data.instance && data.instance.lastError ? ` Detail: ${data.instance.lastError}` : '';
+            showFailure(`The CopyMonster process exited during startup.${detail}`);
             return;
           }
           if (data && data.status === 'stopped') {
-            failureMessage = 'O processo do CopyMonster não está ativo. Tente novamente para iniciar o ambiente.';
+            failureMessage = 'The CopyMonster process is not active. Try again to start the environment.';
           }
         }
       } catch (error) {
         failureMessage = error && error.name === 'AbortError'
-          ? 'A verificação do servidor demorou mais de 5 segundos.'
-          : 'Não foi possível consultar o status do ambiente.';
+          ? 'The server check took longer than 5 seconds.'
+          : 'The environment status could not be queried.';
       } finally {
         polling = false;
       }
 
       if (failureMessage) consecutiveFailures++;
       if (consecutiveFailures >= 3) {
-        showFailure(`${failureMessage} O servidor não conseguiu confirmar o estado do tenant após 3 tentativas. A tela parou para evitar um loop; verifique os logs do serviço e tente novamente depois.`);
+        showFailure(`${failureMessage} The server could not confirm the tenant state after 3 attempts. The screen stopped to avoid a loop; check the service logs and try again later.`);
         return;
       }
 
       if (Date.now() - startedAt >= maxWaitMs) {
-        showFailure(`${failureMessage || 'O ambiente não ficou pronto dentro do tempo esperado.'} A inicialização foi interrompida nesta tela para evitar um loop. Verifique os logs do serviço de tenants antes de tentar novamente.`);
+        showFailure(`${failureMessage || 'The environment did not become ready within the expected time.'} Startup was stopped on this screen to avoid a loop. Check the tenant service logs before trying again.`);
         return;
       }
 

@@ -10,7 +10,7 @@
  * @module dsh-server-login/supervisor/orchestrator
  */
 
-import { spawn, type ChildProcess, type StdioOptions } from 'node:child_process'
+import { spawn, execFile, type ChildProcess, type StdioOptions } from 'node:child_process'
 import { execFileSync } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
@@ -37,6 +37,35 @@ export { AlreadyRunningError, type Instance, type InstanceRole, type InstanceSta
  * missing task; executes any post-restart command from the handoff path. */
 const WATCHDOG_TASK = 'Read DSH_SERVER_LOGIN_HANDOFF_PATH. If it contains a JSON {"command": ...}, run that command. Then exit.'
 
+/** Cgroup directory the transient user scopes live in. */
+const SCOPE_CGROUP_ROOT = '/sys/fs/cgroup/system.slice'
+
+/**
+ * Stable prefix of every transient scope a tenant role owns.
+ * @param userId - tenant the scope belongs to.
+ * @param role - main or watchdog.
+ * @returns the systemd-safe stem, without the unique launch suffix or `.scope`.
+ */
+export function tenantScopeStem(userId: string, role: InstanceRole): string {
+  const safe = userId.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 48)
+  return `copymonster-${role}-${safe}`
+}
+
+/**
+ * Scope units left behind by an earlier launch of the same tenant role.
+ *
+ * Both the retired unsuffixed name and every uniquely suffixed successor match,
+ * so a restarted orchestrator can release a scope it no longer has in memory
+ * before `systemd-run` refuses the reused unit name.
+ * @param entries - cgroup directory entries.
+ * @param stem - prefix from {@link tenantScopeStem}.
+ * @returns the matching unit names.
+ */
+export function staleScopeUnits(entries: readonly string[], stem: string): string[] {
+  return entries.filter(entry => entry.endsWith('.scope')
+    && (entry === `${stem}.scope` || entry.startsWith(`${stem}-`)))
+}
+
 /**
  * Local backend: owns the lifecycle of per-user DSH process pairs via
  * child_process. State is in-memory. Implements {@link Spawner}.
@@ -62,6 +91,9 @@ export class LocalSpawner implements Spawner {
     private readonly db: { findUserById(id: string): Promise<User | undefined> },
   ) {
     this.portGuard = createPortGuard(config.portGuard)
+    // In-memory state does not survive a restart, so scopes started by the
+    // previous process are orphans that would collide with the next launch.
+    this.reapOrphanScopes()
   }
 
   /** Ensure the Linux user/group for the tenant's UID exists (idempotent). */
@@ -214,15 +246,18 @@ export class LocalSpawner implements Spawner {
     if (!this.config.resourceScopes) return
     let entries: string[]
     try {
-      entries = readdirSync('/sys/fs/cgroup/system.slice')
+      entries = readdirSync(SCOPE_CGROUP_ROOT)
     } catch {
       return
     }
     for (const entry of entries) {
       if (!entry.startsWith('copymonster-') || !entry.endsWith('.scope')) continue
-      try {
-        writeFileSync(join('/sys/fs/cgroup/system.slice', entry, 'cgroup.kill'), '1')
-      } catch {}
+      for (const root of [SCOPE_CGROUP_ROOT, '/sys/fs/cgroup']) {
+        try {
+          writeFileSync(join(root, entry, 'cgroup.kill'), '1')
+          break
+        } catch {}
+      }
     }
   }
 
@@ -317,19 +352,21 @@ export class LocalSpawner implements Spawner {
     }
 
     const child = await this.spawnAsUser(userId, role, command, [...args, ...launchArgs], { cwd: folder, env })
-    if (this.config.resourceScopes) instance.scopeUnit = this.scopeUnitName(userId, role)
-    this.trackChild(userId, instance, child)
+    instance.scopeUnit = child.scopeUnit
+    this.trackChild(userId, instance, child.child)
     return instance
   }
 
-  /** Spawn the child, optionally through the account-level setuid wrapper. */
+  /** Spawn the child, optionally through the account-level setuid wrapper.
+   * @returns the child and, when resource scopes are active, the unit holding it.
+   */
   private async spawnAsUser(
     userId: string,
     role: InstanceRole,
     command: string,
     args: string[],
     options: { cwd: string; env: Record<string, string> },
-  ): Promise<ChildProcess> {
+  ): Promise<{ child: ChildProcess; scopeUnit?: string }> {
     const stdio: StdioOptions = ['ignore', 'pipe', 'pipe']
     const env = {
       ...options.env,
@@ -344,7 +381,7 @@ export class LocalSpawner implements Spawner {
 
     if (this.config.isolationMode !== 'account') {
       const resolvedCommand = resolveBinary(command, env.PATH)
-      return spawn(resolvedCommand, args, resolvedOptions)
+      return { child: spawn(resolvedCommand, args, resolvedOptions) }
     }
     // Ensure the Linux user exists before attempting setpriv
     await this.provisionLinuxUser(userId)
@@ -383,17 +420,26 @@ export class LocalSpawner implements Spawner {
     // cannot set `SupplementaryGroups` on a scope unit, and inheriting the
     // caller's groups would leave the tenant inside group root, which both
     // denies it /root and hands it group-root access.
-    const scopeArgs = await this.resourceScopeArgs(userId, role)
-    if (scopeArgs !== undefined) {
+    const scope = await this.prepareResourceScope(userId, role)
+    if (scope !== undefined) {
       const runner = resolveBinary('systemd-run', env.PATH)
-      return spawn(runner, [...scopeArgs, asCommand, ...asArgs, resolvedCommand, ...args], resolvedOptions)
+      return {
+        child: spawn(runner, [...scope.args, asCommand, ...asArgs, resolvedCommand, ...args], resolvedOptions),
+        scopeUnit: scope.unit,
+      }
     }
 
-    return spawn(asCommand, [...asArgs, resolvedCommand, ...args], resolvedOptions)
+    return { child: spawn(asCommand, [...asArgs, resolvedCommand, ...args], resolvedOptions) }
   }
 
   /**
-   * Build the `systemd-run --scope` prefix that caps one tenant's resources.
+   * Release any scope a previous launch left under this tenant role, then build
+   * a uniquely named `systemd-run --scope` prefix for the new one.
+   *
+   * The unit name is derived from the tenant and role, so a restart or a crash
+   * recovery that races the previous teardown made `systemd-run` fail with
+   * "unit is already loaded". Releasing the stale unit first and appending a
+   * launch token keeps the reused name from colliding either way.
    *
    * The plan-derived values stored on the user row win; the global config is
    * the fallback for a tenant whose plan is unknown. Only the limits are set
@@ -401,32 +447,64 @@ export class LocalSpawner implements Spawner {
    * scope never changes the child's identity or groups. `--collect` removes
    * the transient unit when the child exits.
    * @param userId - the tenant whose stored plan limits apply.
-   * @returns the argv prefix, or undefined when no limit is configured.
-   */
-  /**
-   * Name the transient scope after the tenant and role.
-   * @param userId - tenant the scope belongs to.
    * @param role - main or watchdog, so a restart never collides with a live scope.
-   * @returns a systemd-safe unit name.
+   * @returns the unit name and argv prefix, or undefined when no limit is configured.
    */
-  private scopeUnitName(userId: string, role: InstanceRole): string {
-    const safe = userId.replace(/[^A-Za-z0-9_.-]/g, '-').slice(0, 48)
-    return `copymonster-${role}-${safe}.scope`
-  }
-
-  private async resourceScopeArgs(userId: string, role: InstanceRole): Promise<string[] | undefined> {
+  private async prepareResourceScope(
+    userId: string,
+    role: InstanceRole,
+  ): Promise<{ unit: string; args: string[] } | undefined> {
     if (!this.config.resourceScopes) return undefined
     const user = await this.db.findUserById(userId)
     const memoryMax = user?.memory_max ?? this.config.memoryMax
     const cpuQuota = user?.cpu_quota ?? this.config.cpuQuota
     const tasksMax = user?.tasks_max ?? this.config.tasksMax
     if (memoryMax == null && cpuQuota == null && tasksMax == null) return undefined
-    const args = ['--scope', '--quiet', '--collect', `--unit=${this.scopeUnitName(userId, role)}`]
+    const stem = tenantScopeStem(userId, role)
+    await this.releaseStaleScopes(stem)
+    const unit = `${stem}-${randomUUID().replaceAll('-', '').slice(0, 12)}.scope`
+    const args = ['--scope', '--quiet', '--collect', `--unit=${unit}`]
     if (memoryMax !== undefined) args.push('-p', `MemoryMax=${memoryMax}`)
     if (cpuQuota !== undefined) args.push('-p', `CPUQuota=${cpuQuota}`)
     if (tasksMax !== undefined) args.push('-p', `TasksMax=${tasksMax}`)
     args.push('--')
-    return args
+    return { unit, args }
+  }
+
+  /**
+   * Kill and stop every leftover scope for a tenant role and wait for the unit
+   * to unload, so the next `systemd-run` can claim the name.
+   * @param stem - stable prefix from {@link tenantScopeStem}.
+   */
+  private async releaseStaleScopes(stem: string): Promise<void> {
+    let entries: string[]
+    try {
+      entries = readdirSync(SCOPE_CGROUP_ROOT)
+    } catch {
+      return
+    }
+    const stale = staleScopeUnits(entries, stem)
+    if (stale.length === 0) return
+    await Promise.all(stale.map(unit => this.stopScopeUnit(unit)))
+    console.warn(`[supervisor] released stale scope(s) ${stale.join(', ')}`)
+  }
+
+  /**
+   * Empty one scope synchronously through its cgroup, then let systemd collect
+   * the transient unit.
+   * @param unit - scope unit name.
+   * @returns a promise settled when `systemctl stop` returns.
+   */
+  private stopScopeUnit(unit: string): Promise<void> {
+    for (const root of [SCOPE_CGROUP_ROOT, '/sys/fs/cgroup']) {
+      try {
+        writeFileSync(join(root, unit, 'cgroup.kill'), '1')
+        break
+      } catch {}
+    }
+    return new Promise((resolve) => {
+      execFile('systemctl', ['--user', 'stop', unit], { timeout: 10_000 }, () => { resolve() })
+    })
   }
 
   private trackChild(userId: string, instance: Instance, child: ChildProcess): void {
@@ -511,7 +589,7 @@ export class LocalSpawner implements Spawner {
     // because systemd is already stopping this service.
     if (instance.scopeUnit !== undefined) {
       let killed = false
-      for (const dir of [`/sys/fs/cgroup/system.slice/${instance.scopeUnit}`, `/sys/fs/cgroup/${instance.scopeUnit}`]) {
+      for (const dir of [`${SCOPE_CGROUP_ROOT}/${instance.scopeUnit}`, `/sys/fs/cgroup/${instance.scopeUnit}`]) {
         try {
           writeFileSync(join(dir, 'cgroup.kill'), '1')
           killed = true
