@@ -486,11 +486,23 @@ export class LocalSpawner implements Spawner {
   private killInstance(userId: string, instance: Instance): void {
     instance.status = 'stopped'
     // With resource scopes the tenant lives inside a transient unit, and
-    // killing the `systemd-run` wrapper does not end it: stop the unit.
+    // killing the `systemd-run` wrapper does not end it. `cgroup.kill` empties
+    // the delegated subtree synchronously; `systemctl stop` would block here
+    // because systemd is already stopping this service.
     if (instance.scopeUnit !== undefined) {
-      try {
-        execFileSync('systemctl', ['stop', instance.scopeUnit], { stdio: 'ignore', timeout: 5_000 })
-      } catch {}
+      let killed = false
+      for (const dir of [`/sys/fs/cgroup/system.slice/${instance.scopeUnit}`, `/sys/fs/cgroup/${instance.scopeUnit}`]) {
+        try {
+          writeFileSync(join(dir, 'cgroup.kill'), '1')
+          killed = true
+          break
+        } catch {}
+      }
+      if (!killed) {
+        try {
+          execFileSync('systemctl', ['stop', '--no-block', instance.scopeUnit], { stdio: 'ignore', timeout: 5_000 })
+        } catch {}
+      }
     }
     const child = this.children.get(instance.id)
     if (child === undefined) return
