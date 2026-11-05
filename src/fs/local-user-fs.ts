@@ -27,7 +27,7 @@ import { dump as dumpYaml, load as loadYaml } from 'js-yaml'
 import { PathEscapeError, resolveWithinRoot, safeFilename } from '../web/middleware/fs-guard.js'
 import { listInstalledPlugins, type PluginInfo } from './plugins.js'
 import { UserFsError, type UserFs } from './user-fs.js'
-import { ensureDir, grantUserRootPermissions, handoffPath, homeRoot, listDir, rejectSymlinkEscape, workspaceRoot, type FsEntry } from './workspace.js'
+import { ensureDir, grantUserRootPermissions, grantUserSandboxPermissions, handoffPath, homeRoot, listDir, rejectSymlinkEscape, workspaceRoot, type FsEntry } from './workspace.js'
 
 /** Resolve a user id to that user's data root (`<dataRoot>/users/<id>`, or a
  * fixed directory when the sidecar serves exactly one user). */
@@ -225,10 +225,14 @@ export class LocalUserFs implements UserFs {
 
     // The workspace sandbox sits outside this per-user root, so the tenant uid
     // needs the shared root prepared before its DSH can create a workspace.
+    // The sandbox itself is handed to that uid too: a directory this control
+    // plane created as root would refuse the tenant's own `mkdir` (EACCES).
     if (typeof process.getuid === 'function' && process.getuid() === 0) {
+      const dataRoot = process.env.COPYMONSTER_DATA_DIR ?? DEFAULT_COPYMONSTER_DATA_DIR
       try {
-        ensureSharedSandboxRoot(process.env.COPYMONSTER_DATA_DIR ?? DEFAULT_COPYMONSTER_DATA_DIR)
+        ensureSharedSandboxRoot(dataRoot)
       } catch {}
+      if (uid !== undefined) grantUserSandboxPermissions(dataRoot, userId, uid)
     }
 
     // Provision the resident web profile so the per-user DSH can boot without

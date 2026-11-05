@@ -9,7 +9,8 @@
  */
 
 import { execFileSync } from 'node:child_process'
-import { chmodSync, existsSync, mkdirSync } from 'node:fs'
+import { chmodSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
+import type { Dirent } from 'node:fs'
 import { lstat, readdir, stat } from 'node:fs/promises'
 import { join, relative, sep } from 'node:path'
 import { PathEscapeError } from '../web/middleware/fs-guard.js'
@@ -49,6 +50,51 @@ export function ensureDir(path: string): void {
 
 /** Files under a user root whose contents must stay readable only by the tenant. */
 const OWNER_ONLY_FILES = ['.credentials.yaml']
+
+/** Shared Workspace sandbox the tenant DSH writes under, unless configured. */
+export const DEFAULT_SANDBOX_DATA_DIR = '/var/copymonster/data'
+
+/**
+ * Prepare one tenant's Workspace sandbox and hand it to that tenant's uid.
+ *
+ * The sandbox lives at `<dataRoot>/<tenantId>/<userId>/workspaces`, outside the
+ * per-user root {@link grantUserRootPermissions} owns, so a directory the
+ * control plane created as root leaves the tenant's DSH unable to create a
+ * Workspace: `mkdir` fails with `EACCES` and the picker never opens one. The
+ * tenant id comes from the directory name because the control plane keeps it
+ * only in Supabase.
+ *
+ * A tenant with no directory for this user is skipped: the tenant's own DSH
+ * creates that tree on first use.
+ * @param dataRoot - shared sandbox root holding one directory per tenant.
+ * @param userId - Supabase identity naming this user's directory in each tenant.
+ * @param uid - the tenant's Linux uid (also used as gid).
+ */
+export function grantUserSandboxPermissions(dataRoot: string, userId: string, uid: number): void {
+  let tenants: Dirent[]
+  try {
+    tenants = readdirSync(dataRoot, { withFileTypes: true })
+  } catch {
+    return
+  }
+  for (const tenant of tenants) {
+    if (!tenant.isDirectory()) continue
+    const userDir = join(dataRoot, tenant.name, userId)
+    if (!existsSync(userDir)) continue
+    const sandbox = join(userDir, 'workspaces')
+    try {
+      mkdirSync(sandbox, { recursive: true, mode: 0o700 })
+      const owner = statSync(sandbox)
+      if (owner.uid !== uid || owner.gid !== uid) {
+        execFileSync('chown', ['-R', `${uid}:${uid}`, sandbox], { stdio: 'ignore' })
+      }
+      chmodSync(sandbox, 0o700)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      console.warn(`[provisioning] prepare workspace sandbox failed for ${sandbox}: ${detail}`)
+    }
+  }
+}
 
 /**
  * Hand a user root to the tenant's own uid. The recursive pass makes the tree

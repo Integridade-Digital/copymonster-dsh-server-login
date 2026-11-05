@@ -17,7 +17,15 @@ import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, writeFileSync
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import type { User } from '../db/types.js'
-import { grantUserRootPermissions, handoffPath, homeRoot, userRoot, workspaceRoot } from '../fs/workspace.js'
+import {
+  DEFAULT_SANDBOX_DATA_DIR,
+  grantUserRootPermissions,
+  grantUserSandboxPermissions,
+  handoffPath,
+  homeRoot,
+  userRoot,
+  workspaceRoot,
+} from '../fs/workspace.js'
 import { createPortGuard, type PortGuard } from './firewall.js'
 import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
 import {
@@ -393,6 +401,14 @@ export class LocalSpawner implements Spawner {
         // restrictive modes come after it; the reverse order reopened the
         // owner-only directories on every spawn.
         grantUserRootPermissions(root, uid)
+        // The Workspace sandbox sits outside this per-user root, so it needs
+        // its own handover: a directory the control plane created as root
+        // refuses the tenant's `mkdir` and every Workspace pick fails EACCES.
+        grantUserSandboxPermissions(
+          process.env.COPYMONSTER_DATA_DIR ?? DEFAULT_SANDBOX_DATA_DIR,
+          userId,
+          uid,
+        )
         // Traversal without listing for the shared parents: a tenant uid must
         // reach its own root, and must not enumerate the other tenants. The
         // per-user root, its home and its workspace stay owner-only.
