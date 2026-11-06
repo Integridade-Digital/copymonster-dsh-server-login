@@ -18,6 +18,7 @@ import { homeRoot, userRoot } from './fs/workspace.js'
 import { hashPassword } from './web/auth.js'
 import { hashUid } from './isolation.js'
 import { LeaderElector } from './supervisor/leader.js'
+import { publicOriginForUser } from './supervisor/proxy.js'
 import { ReconcileController } from './supervisor/reconcile.js'
 import { K8sSpawner } from './supervisor/k8s-spawner.js'
 import { buildFileService, FILE_SERVICE_PORT, USER_ROOT_ENV } from './web/file-service.js'
@@ -101,7 +102,7 @@ async function bootstrapAdmin(args: string[]): Promise<void> {
   // Create the user before initUserRoot so the per-user uid (baseUid + row_id)
   // is already assigned — same reason as the register route.
   const user = await db.createUser({ id, username, passHash, role: 'admin', homeDir })
-  await createUserFs(config).initUserRoot(id, user.uid ?? undefined)
+  await createUserFs(config).initUserRoot(id, user.uid ?? undefined, publicOriginForUser(config.baseDomain, username))
   await db.close()
   console.log(`admin "${username}" created (id: ${id})`)
 }

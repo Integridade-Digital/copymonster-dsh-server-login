@@ -60,8 +60,10 @@ export interface UserFs {
   /** Create the user's home/workspace roots (`0700`). Idempotent.
    * `uid` (when provided) makes local mode chown the roots to the user's Linux
    * uid — the DSH child runs as that uid and would otherwise hit EACCES writing
-   * `home/` (directories are created by the root control plane). */
-  initUserRoot(userId: string, uid?: number): Promise<void>
+   * `home/` (directories are created by the root control plane).
+   * `publicOrigin` (when provided) pins deployment-scoped profile entries —
+   * today the Zernio plugin's trusted origin — to this tenant's own origin. */
+  initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void>
   /** Absolute path of `relPath` **as the user's DSH process sees it** (pure path
    * math — the in-Pod mount path under k8s, the host path under local). */
   resolvePath(userId: string, relPath: string): string

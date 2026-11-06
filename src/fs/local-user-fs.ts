@@ -61,6 +61,9 @@ function chownRecursiveSync(targetPath: string, uid: number, gid: number): void 
 
 const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
 const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
+const ZERNIO_BUNDLE = '@deepseek-ai/dsh-experimental-zernio-mcp'
+/** Profile patch row id the Zernio bundle inserts; the profile layer overrides its origin. */
+const ZERNIO_ROW_ID = 'zernio-mcp'
 
 /** Shared workspace sandbox the tenant DSH writes under, unless configured. */
 const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
@@ -192,32 +195,114 @@ function restrictToOwner(targetPath: string): void {
   } catch {}
 }
 
-function ensureCopyMonsterBundle(packageJsonPath: string): void {
+/**
+ * Ensure one bundle appears in a profile's `dsh.profile.bundles`, inserted
+ * directly after the Web app layer so it applies after `dsh-base` and
+ * `dsh-web-app` but before the profile's own `cordis.patch.yml`.
+ * @param packageJsonPath - the profile's `package.json`.
+ * @param bundle - bare bundle package name.
+ */
+function ensureBundle(packageJsonPath: string, bundle: string): void {
   try {
     if (!existsSync(packageJsonPath)) return
     const raw = readFileSync(packageJsonPath, 'utf8')
     const manifest = JSON.parse(raw)
     const profile = manifest?.dsh?.profile
     if (profile === undefined || !Array.isArray(profile.bundles)) return
-    if (profile.bundles.includes(COPYMONSTER_BUNDLE)) return
+    if (profile.bundles.includes(bundle)) return
     const bundles = [...profile.bundles]
     const anchorIdx = bundles.indexOf(WEB_APP_BUNDLE)
     if (anchorIdx === -1) {
-      bundles.push(COPYMONSTER_BUNDLE)
+      bundles.push(bundle)
     } else {
-      bundles.splice(anchorIdx + 1, 0, COPYMONSTER_BUNDLE)
+      bundles.splice(anchorIdx + 1, 0, bundle)
     }
     manifest.dsh.profile.bundles = bundles
     writeFileSync(packageJsonPath, `${JSON.stringify(manifest, undefined, 2)}\n`)
   } catch (error) {
-    warnProvisioning('ensure CopyMonster bundle', packageJsonPath, error)
+    warnProvisioning(`ensure ${bundle} bundle`, packageJsonPath, error)
+  }
+}
+
+/**
+ * Ensure the profile patch carries the Zernio row with this deployment's own
+ * public origin. The bundle's own patch inserts the row without an origin, so
+ * a tenant reaching its DSH through `<username>.<baseDomain>` would otherwise
+ * fail the plugin's trusted-host fence and register a loopback callback.
+ * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ * @param publicOrigin - browser-facing origin of this tenant.
+ */
+function ensureZernioEntry(cordisPatchPath: string, publicOrigin: string): void {
+  try {
+    if (!existsSync(cordisPatchPath)) return
+    const raw = readFileSync(cordisPatchPath, 'utf8')
+    const lines = raw.split('\n')
+    const idIdx = lines.findIndex(line => line.trim() === `- id: ${ZERNIO_ROW_ID}`)
+    if (idIdx === -1) {
+      const block = [
+        `- id: ${ZERNIO_ROW_ID}`,
+        `  name: "${ZERNIO_BUNDLE}"`,
+        '  config:',
+        `    publicOrigin: ${publicOrigin}`,
+        '',
+      ].join('\n')
+      writeFileSync(cordisPatchPath, raw.endsWith('\n') ? `${raw}${block}` : `${raw}\n${block}`)
+      return
+    }
+    let end = lines.length
+    for (let i = idIdx + 1; i < lines.length; i += 1) {
+      if (lines[i].startsWith('- ')) {
+        end = i
+        break
+      }
+    }
+    const originIdx = lines.findIndex((line, i) => i > idIdx && i < end && line.trimStart().startsWith('publicOrigin:'))
+    if (originIdx !== -1) {
+      lines[originIdx] = `    publicOrigin: ${publicOrigin}`
+    } else {
+      const configIdx = lines.findIndex((line, i) => i > idIdx && i < end && line.trim() === 'config:')
+      if (configIdx !== -1) {
+        lines.splice(configIdx + 1, 0, `    publicOrigin: ${publicOrigin}`)
+      } else {
+        lines.splice(end, 0, '  config:', `    publicOrigin: ${publicOrigin}`)
+      }
+    }
+    writeFileSync(cordisPatchPath, lines.join('\n'))
+  } catch (error) {
+    warnProvisioning('ensure Zernio profile entry', cordisPatchPath, error)
+  }
+}
+
+/**
+ * Make the Zernio package resolvable from a profile whose `node_modules` is a
+ * real directory (older tenants copied before the template gained the package).
+ * @param userModules - the profile's `node_modules`.
+ * @param templateModules - the template profile's `node_modules`, when present.
+ */
+function linkZernioPackage(userModules: string, templateModules: string | undefined): void {
+  const link = join(userModules, '@deepseek-ai', 'dsh-experimental-zernio-mcp')
+  if (existsSync(link) || templateModules === undefined) return
+  const target = join(templateModules, '@deepseek-ai', 'dsh-experimental-zernio-mcp')
+  if (!existsSync(target)) return
+  try {
+    ensureDir(join(userModules, '@deepseek-ai'))
+    symlinkSync(realpathSync(target), link, 'dir')
+  } catch (error) {
+    warnProvisioning('link Zernio package', link, error)
   }
 }
 
 export class LocalUserFs implements UserFs {
   constructor(private readonly rootFor: UserRootResolver) {}
 
-  async initUserRoot(userId: string, uid?: number): Promise<void> {
+  /**
+   * Provision a tenant root and keep its web profile aligned with the template.
+   * @param userId - tenant user id.
+   * @param uid - tenant Linux uid, when the control plane assigns one.
+   * @param publicOrigin - browser-facing origin of this tenant; when set, the
+   *   profile patch pins the Zernio plugin to it.
+   */
+  async initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void> {
     const root = this.rootFor(userId)
     ensureDir(homeRoot(root))
     ensureDir(workspaceRoot(root))
@@ -271,7 +356,16 @@ export class LocalUserFs implements UserFs {
 
     // Always ensure the tenant's web profile includes the CopyMonster bundle
     const userPackageJson = join(userProfile, 'package.json')
-    ensureCopyMonsterBundle(userPackageJson)
+    ensureBundle(userPackageJson, COPYMONSTER_BUNDLE)
+
+    // Existing profiles were copied before later template additions, so the
+    // Zernio plugin and its per-tenant origin are backfilled on every launch
+    // rather than only at first provisioning.
+    if (publicOrigin !== undefined) {
+      ensureBundle(userPackageJson, ZERNIO_BUNDLE)
+      linkZernioPackage(userModules, templateModules)
+      ensureZernioEntry(join(userProfile, 'cordis.patch.yml'), publicOrigin)
+    }
 
     // The operator configures the provider once; every tenant consumes it.
     seedGlobalCredentials(homeRoot(root))

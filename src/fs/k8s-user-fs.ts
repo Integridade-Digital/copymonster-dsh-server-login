@@ -45,7 +45,7 @@ export class K8sUserFs implements UserFs {
     private readonly endpointFor: (userId: string) => Endpoint,
   ) {}
 
-  async initUserRoot(userId: string): Promise<void> {
+  async initUserRoot(userId: string, _uid?: number, _publicOrigin?: string): Promise<void> {
     // Creating the sidecar Pod *is* the initialization: its init container
     // builds `<pvc>/<userId>/{ws,home}` as the user's own uid (docs/k8s.md §4.9).
     await this.ensureFileService(userId)

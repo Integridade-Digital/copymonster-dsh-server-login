@@ -20,6 +20,7 @@ import {
   verifyPassword,
 } from '../auth.js'
 import { signSessionCookie, verifySessionCookie } from '../session-cookie.js'
+import { publicOriginForUser } from '../../supervisor/proxy.js'
 
 const registerSchema = {
   body: {
@@ -256,7 +257,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           })
           await app.db.setUserSupabaseSub(sub, sub)
           user.supabase_sub = sub
-          await app.userFs.initUserRoot(sub, user.uid ?? undefined)
+          await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username))
           await app.db.audit(sub, 'sso_provision', JSON.stringify({ username }))
         }
       }
