@@ -1,3 +1,5 @@
+import { CentralRoutingStore } from '../config/llm-central-store.js'
+import { getSupabaseClient } from '../supabase.js'
 /**
  * Fastify bootstrap: assembles the HTTP server, registers plugins and routes,
  * and owns the DB lifecycle via the close hook.
@@ -34,6 +36,7 @@ declare module 'fastify' {
     supervisor: Spawner
     userFs: UserFs
     identity: IdentitySigner
+    centralRoutingStore: CentralRoutingStore
   }
   interface FastifyRequest {
     user: PublicUser | null
@@ -82,6 +85,24 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   app.decorate('supervisor', supervisor)
   app.decorate('userFs', userFs)
   app.decorate('identity', identity)
+
+  // Centralized LLM routing store: reads from Supabase public.system_config
+  // on boot with disk/memory fallback cache.
+  let sbClient = null
+  if (config.supabaseUrl && config.supabaseAnonKey) {
+    try {
+      sbClient = getSupabaseClient(config)
+    } catch (err) {
+      app.log.warn(`[server] Failed to initialize Supabase client for LLM routing: ${String(err)}`)
+    }
+  }
+  const centralRoutingStore = new CentralRoutingStore({
+    supabaseClient: sbClient,
+    cacheDir: config.dataRoot,
+    logger: app.log,
+  })
+  await centralRoutingStore.loadOnBoot()
+  app.decorate('centralRoutingStore', centralRoutingStore)
   app.decorateRequest('user', null)
 
   // Reverse proxy (subdomain + legacy subpath). Registered first so its global
