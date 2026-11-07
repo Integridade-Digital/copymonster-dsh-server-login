@@ -342,7 +342,7 @@ function ensureModelMaskEntry(cordisPatchPath: string): void {
     }
     const prefix = lines.slice(0, idIdx).join('\n')
     const suffix = lines.slice(end).join('\n')
-    writeFileSync(cordisPatchPath, `${prefix}${block}${suffix}`)
+    writeFileSync(cordisPatchPath, `${appendYamlBlock(prefix, block)}${suffix}`)
   } catch (error) {
     warnProvisioning('ensure model-mask profile entry', cordisPatchPath, error)
   }
