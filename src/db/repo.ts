@@ -35,7 +35,7 @@ import {
   type Workspace,
 } from './types.js'
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max, llm_mask_version'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -64,6 +64,7 @@ export function createUser(db: Database, input: CreateUserInput, baseUid: number
       cpu_quota: null,
       tasks_max: null,
       supabase_sub: null,
+      llm_mask_version: null,
     }
   })()
 }
@@ -328,6 +329,19 @@ export function setUserUid(db: Database, userId: string, uid: number): void {
 /** Ids of users whose uid is still null (legacy rows awaiting backfill). */
 export function listUsersWithoutUid(db: Database): string[] {
   const rows = prepare(db, 'SELECT id FROM users WHERE uid IS NULL').all() as Array<{ id: string }>
+  return rows.map((row) => row.id)
+}
+
+/** Record the LLM model-mask routing version applied to one user's profile. Pass null to reset (rollback). */
+export function setUserLlmMaskVersion(db: Database, userId: string, version: number | null): void {
+  prepare(db, 'UPDATE users SET llm_mask_version = ? WHERE id = ?').run(version, userId)
+}
+
+/** Ids of users whose mask version is null or differs from the target (awaiting backfill). */
+export function listUsersWithoutLlmMask(db: Database, targetVersion: number): string[] {
+  const rows = prepare(db, 'SELECT id FROM users WHERE llm_mask_version IS NULL OR llm_mask_version <> ?').all(
+    targetVersion,
+  ) as Array<{ id: string }>
   return rows.map((row) => row.id)
 }
 

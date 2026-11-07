@@ -40,7 +40,7 @@ import {
 // both backends. This is process-global and idempotent.
 types.setTypeParser(20, (value: string) => Number(value))
 
-const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max'
+const USER_COLS = 'id, username, pass_hash, role, home_dir, api_key_ref, created_at, approved_by, uid, supabase_sub, plan_slug, memory_max, cpu_quota, tasks_max, llm_mask_version'
 const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
@@ -89,6 +89,7 @@ export class PgAdapter implements DbAdapter {
           memory_max: null,
           cpu_quota: null,
           tasks_max: null,
+          llm_mask_version: null,
         }
       })
     } catch (e) {
@@ -154,6 +155,18 @@ export class PgAdapter implements DbAdapter {
   async listUsersWithoutUid(): Promise<string[]> {
     const { rows } = await this.pool.query('SELECT id FROM users WHERE uid IS NULL')
     return (rows as Array<{ id: string }>).map((row) => row.id)
+  }
+
+  async listUsersWithoutLlmMask(targetVersion: number): Promise<string[]> {
+    const { rows } = await this.pool.query(
+      'SELECT id FROM users WHERE llm_mask_version IS NULL OR llm_mask_version <> $1',
+      [targetVersion],
+    )
+    return (rows as Array<{ id: string }>).map((row) => row.id)
+  }
+
+  async setUserLlmMaskVersion(userId: string, version: number | null): Promise<void> {
+    await this.pool.query('UPDATE users SET llm_mask_version = $1 WHERE id = $2', [version, userId])
   }
 
   async createSession(input: CreateSessionInput): Promise<void> {

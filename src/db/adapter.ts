@@ -40,6 +40,10 @@ export interface DbAdapter {
   setUserUid(userId: string, uid: number): Promise<void>
   /** Ids of users whose uid column is still null (legacy rows awaiting backfill). */
   listUsersWithoutUid(): Promise<string[]>
+  /** Ids of users whose mask version is null or differs from the target (awaiting backfill). */
+  listUsersWithoutLlmMask(targetVersion: number): Promise<string[]>
+  /** Record the LLM model-mask routing version applied to one user's profile. Pass null to reset (rollback). */
+  setUserLlmMaskVersion(userId: string, version: number | null): Promise<void>
   // sessions
   createSession(input: CreateSessionInput): Promise<void>
   findSession(tokenHash: string): Promise<SessionRow | undefined>

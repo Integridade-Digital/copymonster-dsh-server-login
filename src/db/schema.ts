@@ -242,6 +242,16 @@ ALTER TABLE users ADD COLUMN cpu_quota TEXT;
 ALTER TABLE users ADD COLUMN tasks_max INTEGER;
 `
 
+// v7: LLM model-mask backfill checkpoint. Records the applied central-routing
+// version per user so backfill is idempotent and can be rolled back by version.
+const SQLITE_V7 = `
+ALTER TABLE users ADD COLUMN llm_mask_version INTEGER;
+`
+
+const PG_V7 = `
+ALTER TABLE users ADD COLUMN llm_mask_version INTEGER;
+`
+
 interface Migration {
   version: number
   name: string
@@ -256,6 +266,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 4, name: 'instance desired state', sqlite: SQLITE_V4, pg: PG_V4 },
   { version: 5, name: 'supabase sub link', sqlite: SQLITE_V5, pg: PG_V5 },
   { version: 6, name: 'plan resource limits', sqlite: SQLITE_V6, pg: PG_V6 },
+  { version: 7, name: 'llm mask backfill checkpoint', sqlite: SQLITE_V7, pg: PG_V7 },
 ]
 
 /** Apply unapplied SQLite migrations inside a single transaction. */

@@ -29,6 +29,8 @@ export interface User {
   cpu_quota: string | null
   /** `TasksMax` for this tenant's scope, resolved from the plan. */
   tasks_max: number | null
+  /** Central LLM routing version applied to this tenant's profile (backfill checkpoint). */
+  llm_mask_version: number | null
 }
 
 /** Plan-derived resource limits stored on a user row. */
@@ -171,6 +173,7 @@ export function toUser(row: Record<string, unknown>): User {
     cpu_quota: (row.cpu_quota as string | null) ?? null,
     tasks_max: (row.tasks_max as number | null) ?? null,
     supabase_sub: (row.supabase_sub as string | null) ?? null,
+    llm_mask_version: (row.llm_mask_version as number | null) ?? null,
   }
 }
 

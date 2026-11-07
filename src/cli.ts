@@ -24,6 +24,7 @@ import { K8sSpawner } from './supervisor/k8s-spawner.js'
 import { buildFileService, FILE_SERVICE_PORT, USER_ROOT_ENV } from './web/file-service.js'
 import { startTcpBridge } from './tcp-bridge.js'
 import { buildServer } from './web/server.js'
+import { DEFAULT_CENTRAL_ROUTING_CONFIG } from './config/llm-central-routing.js'
 
 const HELP = `dsh-server-login — DSH server login orchestrator
 
@@ -47,6 +48,12 @@ Server options:
 bootstrap-admin options:
   --username <u>    Admin username (required).
   --password <p>    Admin password (or DSH_SERVER_LOGIN_ADMIN_PASSWORD env).
+  --db <path>       Database path.
+  --data-root <p>   Root for per-user homes.
+
+backfill-llm-mask options:
+  --dry-run         List tenants that would be backfilled without writing.
+  --rollback        Reset llm_mask_version to null (no filesystem undo).
   --db <path>       Database path.
   --data-root <p>   Root for per-user homes.
 `
@@ -105,6 +112,84 @@ async function bootstrapAdmin(args: string[]): Promise<void> {
   await createUserFs(config).initUserRoot(id, user.uid ?? undefined, publicOriginForUser(config.baseDomain, username))
   await db.close()
   console.log(`admin "${username}" created (id: ${id})`)
+}
+
+/**
+ * Idempotent backfill of the LLM model-mask profile into existing tenants.
+ * For each user whose `llm_mask_version` is null or differs from the target
+ * version, re-runs `initUserRoot` (which now writes the virtual settings.yaml
+ * and injects model-mask into cordis.patch.yml) and stamps the version.
+ * Supports `--dry-run` (list only, no writes) and `--rollback` (reset version
+ * to null so the mask is no longer considered applied).
+ */
+async function backfillLlmMask(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      'dry-run': { type: 'boolean' },
+      rollback: { type: 'boolean' },
+      db: { type: 'string' },
+      'data-root': { type: 'string' },
+    },
+  })
+  const dryRun = values['dry-run'] === true
+  const rollback = values.rollback === true
+  const targetVersion = DEFAULT_CENTRAL_ROUTING_CONFIG.version
+
+  const config = resolveConfig({ dbPath: values.db, dataRoot: values['data-root'] })
+  const db = await createDbAdapter(config)
+  const userFs = createUserFs(config)
+
+  const userIds = rollback
+    ? await db.listUsersWithoutLlmMask(0) // all users with a non-null version
+    : await db.listUsersWithoutLlmMask(targetVersion)
+
+  if (userIds.length === 0) {
+    console.log(`backfill-llm-mask: nothing to do (target v${targetVersion}, dry-run=${dryRun})`)
+    await db.close()
+    return
+  }
+
+  console.log(
+    `backfill-llm-mask: ${userIds.length} tenant(s) ${rollback ? 'rolling back' : 'to backfill'} (target v${targetVersion}, dry-run=${dryRun})`,
+  )
+
+  for (const userId of userIds) {
+    const user = await db.findUserById(userId)
+    if (user === undefined) {
+      console.warn(`[backfill-llm-mask] user ${userId} not found in DB, skipping`)
+      continue
+    }
+
+    if (rollback) {
+      await db.setUserLlmMaskVersion(userId, null)
+      console.log(`  reset user ${user.username} (${userId}) -> llm_mask_version=null`)
+      continue
+    }
+
+    if (dryRun) {
+      const uid = user.uid
+      const origin = publicOriginForUser(config.baseDomain, user.username)
+      console.log(
+        `  [dry-run] would backfill user ${user.username} (${userId}) -> ${origin}`,
+      )
+      continue
+    }
+
+    const uid = user.uid
+    const origin = publicOriginForUser(config.baseDomain, user.username)
+    try {
+      await userFs.initUserRoot(userId, uid === null ? undefined : uid, origin)
+      await db.setUserLlmMaskVersion(userId, targetVersion)
+      console.log(`  backfilled user ${user.username} (${userId}) -> v${targetVersion}`)
+    } catch (error) {
+      const detail = error instanceof Error ? error.message : String(error)
+      console.error(`  failed user ${user.username} (${userId}): ${detail}`)
+    }
+  }
+
+  await db.close()
+  console.log('backfill-llm-mask: done')
 }
 
 async function runServer(args: string[]): Promise<void> {
@@ -247,6 +332,10 @@ async function main(): Promise<void> {
   }
   if (first === 'tcp-bridge') {
     await runTcpBridge(rest)
+    return
+  }
+  if (first === 'backfill-llm-mask') {
+    await backfillLlmMask(rest)
     return
   }
   await runServer(process.argv.slice(2))

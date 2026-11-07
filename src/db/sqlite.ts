@@ -42,6 +42,8 @@ import {
   listInstancesByRole as listInstancesByRoleSync,
   listPublicUsers as listPublicUsersSync,
   listUsersWithoutUid as listUsersWithoutUidSync,
+  listUsersWithoutLlmMask as listUsersWithoutLlmMaskSync,
+  setUserLlmMaskVersion as setUserLlmMaskVersionSync,
   selectCredentialKey as selectCredentialKeySync,
   setCredentialKey as setCredentialKeySync,
   setDomainVerified as setDomainVerifiedSync,
@@ -129,6 +131,14 @@ export class SqliteAdapter implements DbAdapter {
 
   async listUsersWithoutUid(): Promise<string[]> {
     return listUsersWithoutUidSync(this.db)
+  }
+
+  async listUsersWithoutLlmMask(targetVersion: number): Promise<string[]> {
+    return listUsersWithoutLlmMaskSync(this.db, targetVersion)
+  }
+
+  async setUserLlmMaskVersion(userId: string, version: number | null): Promise<void> {
+    setUserLlmMaskVersionSync(this.db, userId, version)
   }
 
   async createSession(input: CreateSessionInput): Promise<void> {

@@ -62,8 +62,11 @@ function chownRecursiveSync(targetPath: string, uid: number, gid: number): void 
 const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
 const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
 const ZERNIO_BUNDLE = '@deepseek-ai/dsh-experimental-zernio-mcp'
+const MODEL_MASK_BUNDLE = '@deepseek-ai/dsh-host-model-mask'
 /** Profile patch row id the Zernio bundle inserts; the profile layer overrides its origin. */
 const ZERNIO_ROW_ID = 'zernio-mcp'
+/** Profile patch row id the model-mask bundle inserts; tenants only see the virtual CopyMonster model. */
+const MODEL_MASK_ROW_ID = 'model-mask'
 
 /** Shared workspace sandbox the tenant DSH writes under, unless configured. */
 const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
@@ -75,6 +78,21 @@ const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
  * (per-tenant grants) — only `refs` are shared.
  */
 const DEFAULT_GLOBAL_CREDENTIALS = '/root/.dsh/.credentials.yaml'
+
+/**
+ * Minimal tenant `settings.yaml`: only the virtual CopyMonster model is
+ * advertised. The real provider/model resolve privately via the model-mask
+ * plugin, so the tenant never sees the underlying route.
+ */
+const VIRTUAL_SETTINGS_YAML = `llm:
+  providers:
+    - id: copymonster
+      name: Model CopyMonster
+      models:
+        - id: copy-monster-default
+          name: Model CopyMonster
+  default: copy-monster-default
+`
 
 /** Shape of a harness credential store, as far as provisioning reads it. */
 interface CredentialStore {
@@ -274,6 +292,51 @@ function ensureZernioEntry(cordisPatchPath: string, publicOrigin: string): void 
 }
 
 /**
+ * Ensure the tenant's `cordis.patch.yml` mounts the model-mask bundle with the
+ * virtual CopyMonster model only. Idempotent: a no-op when the row already
+ * exists; updates the config block if the row is present but stale.
+ * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ */
+function ensureModelMaskEntry(cordisPatchPath: string): void {
+  try {
+    if (!existsSync(cordisPatchPath)) return
+    const raw = readFileSync(cordisPatchPath, 'utf8')
+    const lines = raw.split('\n')
+    const idIdx = lines.findIndex(line => line.trim() === `- id: ${MODEL_MASK_ROW_ID}`)
+    const block = [
+      `- id: ${MODEL_MASK_ROW_ID}`,
+      `  name: "${MODEL_MASK_BUNDLE}"`,
+      '  config:',
+      `    virtualProvider: copymonster`,
+      `    virtualModel: copy-monster-default`,
+      `    virtualModelName: Model CopyMonster`,
+      `    primaryProvider: deepseek`,
+      `    primaryModel: deepseek-v4.1-pro`,
+      `    applyToTenantsOnly: true`,
+      '',
+    ].join('\n')
+    if (idIdx === -1) {
+      // Append the model-mask row at the end of the file.
+      writeFileSync(cordisPatchPath, raw.endsWith('\n') ? `${raw}${block}` : `${raw}\n${block}`)
+      return
+    }
+    // Row exists: replace its config block up to the next `- id:` row.
+    let end = lines.length
+    for (let i = idIdx + 1; i < lines.length; i += 1) {
+      if (lines[i].startsWith('- ')) {
+        end = i
+        break
+      }
+    }
+    const prefix = lines.slice(0, idIdx).join('\n')
+    const suffix = lines.slice(end).join('\n')
+    writeFileSync(cordisPatchPath, `${prefix}${block}${suffix}`)
+  } catch (error) {
+    warnProvisioning('ensure model-mask profile entry', cordisPatchPath, error)
+  }
+}
+
+/**
  * Make the Zernio package resolvable from a profile whose `node_modules` is a
  * real directory (older tenants copied before the template gained the package).
  * @param userModules - the profile's `node_modules`.
@@ -333,8 +396,23 @@ export class LocalUserFs implements UserFs {
     if (templateProfile && !existsSync(userProfile)) {
       cpSync(templateProfile, userProfile, {
         recursive: true,
-        filter: (src) => src !== join(templateProfile, 'node_modules'),
+        filter: (src) => {
+          const base = join(templateProfile, 'node_modules')
+          const settingsYaml = join(templateProfile, 'settings.yaml')
+          // Never copy the Admin's raw settings.yaml — it exposes real provider
+          // model names to the tenant. A virtual-model settings.yaml is written
+          // below instead.
+          return src !== base && src !== settingsYaml
+        },
       })
+      // Write the tenant-only settings.yaml: only the virtual CopyMonster model
+      // is advertised. Real providers resolve privately via model-mask.
+      const tenantSettingsYaml = join(userProfile, 'settings.yaml')
+      try {
+        writeFileSync(tenantSettingsYaml, VIRTUAL_SETTINGS_YAML, { mode: 0o644 })
+      } catch (error) {
+        warnProvisioning('write virtual settings.yaml', tenantSettingsYaml, error)
+      }
     }
 
     // Share the template's installed dependencies rather than copying them: the
@@ -366,6 +444,11 @@ export class LocalUserFs implements UserFs {
       linkZernioPackage(userModules, templateModules)
       ensureZernioEntry(join(userProfile, 'cordis.patch.yml'), publicOrigin)
     }
+
+    // Inject the model-mask row into the tenant's cordis.patch.yml so tenants
+    // only see the virtual `copy-monster-default` / "Model CopyMonster" model.
+    // Idempotent: a no-op when the row already exists.
+    ensureModelMaskEntry(join(userProfile, 'cordis.patch.yml'))
 
     // The operator configures the provider once; every tenant consumes it.
     seedGlobalCredentials(homeRoot(root))
