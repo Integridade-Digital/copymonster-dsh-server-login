@@ -68,6 +68,17 @@ const ZERNIO_ROW_ID = 'zernio-mcp'
 /** Profile patch row id the model-mask bundle inserts; tenants only see the virtual CopyMonster model. */
 const MODEL_MASK_ROW_ID = 'model-mask'
 
+/**
+ * Append a YAML block to existing patch content, guaranteeing a newline
+ * separator between the existing content and the new block and a trailing
+ * newline. Prevents rows from different blocks being fused onto a single
+ * line when the source file lacks a trailing newline.
+ */
+function appendYamlBlock(raw: string, block: string): string {
+  const separator = raw.endsWith('\n') ? '' : '\n'
+  return `${raw}${separator}${block.endsWith('\n') ? block : `${block}\n`}`
+}
+
 /** Shared workspace sandbox the tenant DSH writes under, unless configured. */
 const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
 
@@ -264,7 +275,7 @@ function ensureZernioEntry(cordisPatchPath: string, publicOrigin: string): void 
         `    publicOrigin: ${publicOrigin}`,
         '',
       ].join('\n')
-      writeFileSync(cordisPatchPath, raw.endsWith('\n') ? `${raw}${block}` : `${raw}\n${block}`)
+      writeFileSync(cordisPatchPath, appendYamlBlock(raw, block))
       return
     }
     let end = lines.length
@@ -285,7 +296,8 @@ function ensureZernioEntry(cordisPatchPath: string, publicOrigin: string): void 
         lines.splice(end, 0, '  config:', `    publicOrigin: ${publicOrigin}`)
       }
     }
-    writeFileSync(cordisPatchPath, lines.join('\n'))
+    const updated = lines.join('\n')
+    writeFileSync(cordisPatchPath, updated.endsWith('\n') ? updated : `${updated}\n`)
   } catch (error) {
     warnProvisioning('ensure Zernio profile entry', cordisPatchPath, error)
   }
@@ -317,7 +329,7 @@ function ensureModelMaskEntry(cordisPatchPath: string): void {
     ].join('\n')
     if (idIdx === -1) {
       // Append the model-mask row at the end of the file.
-      writeFileSync(cordisPatchPath, raw.endsWith('\n') ? `${raw}${block}` : `${raw}\n${block}`)
+      writeFileSync(cordisPatchPath, appendYamlBlock(raw, block))
       return
     }
     // Row exists: replace its config block up to the next `- id:` row.
