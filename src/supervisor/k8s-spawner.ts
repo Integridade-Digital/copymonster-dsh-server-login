@@ -12,8 +12,17 @@ import * as k8s from '@kubernetes/client-node'
 import type { ServerConfig } from '../config.js'
 import type { DbAdapter } from '../db/adapter.js'
 import { HANDOFF_FILE, HOME_DIR, USERS_DIR, WORKSPACE_DIR } from '../fs/workspace.js'
-import { FILE_SERVICE_PORT, USER_ROOT_ENV } from '../web/file-service.js'
+import { FILE_SERVICE_PORT, FILE_SERVICE_TOKEN_ENV, FILE_SERVICE_USER_ENV, USER_ROOT_ENV, fileServiceTokenFor } from '../web/file-service.js'
 import type { Fencing } from './leader.js'
+
+/**
+ * Per-Pod file-service token, derived from the deployment secret and user id.
+ * @param userId - the tenant whose sidecar receives the token.
+ * @returns the token text, or an empty string when the secret is unset.
+ */
+export function fileServiceToken(userId: string): string {
+  return fileServiceTokenFor(process.env[FILE_SERVICE_TOKEN_ENV] ?? '', userId)
+}
 import { AlreadyRunningError, type Endpoint, type Instance, type LivePod, type Spawner, type UserStatus } from './spawner.js'
 
 /** Loopback port the dsh container binds; the socat sidecar bridges 8081 → 8080. */
@@ -573,7 +582,13 @@ export class K8sSpawner implements Spawner {
               name: 'files',
               image: this.config.controlPlaneImage,
               args: ['file-service'],
-              env: [{ name: USER_ROOT_ENV, value: mount }],
+              // Per-Pod token: the control plane presents the same value, so a
+              // peer that reaches 8082 without it gets 401.
+              env: [
+                { name: USER_ROOT_ENV, value: mount },
+                { name: FILE_SERVICE_TOKEN_ENV, value: process.env[FILE_SERVICE_TOKEN_ENV] ?? '' },
+                { name: FILE_SERVICE_USER_ENV, value: userId },
+              ],
               ports: [{ containerPort: FILE_SERVICE_PORT }],
               readinessProbe: { tcpSocket: { port: FILE_SERVICE_PORT }, initialDelaySeconds: 2, periodSeconds: 3 },
               volumeMounts: [{ name: 'data', mountPath: mount, subPath: userId }, tmpMount()],

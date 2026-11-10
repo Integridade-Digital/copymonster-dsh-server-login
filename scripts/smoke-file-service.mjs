@@ -6,7 +6,7 @@
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { buildFileService } from '../lib/web/file-service.js'
+import { buildFileService, fileServiceTokenFor } from '../lib/web/file-service.js'
 import { K8sUserFs } from '../lib/fs/k8s-user-fs.js'
 import { LocalUserFs } from '../lib/fs/local-user-fs.js'
 import { UserFsError } from '../lib/fs/user-fs.js'
@@ -29,8 +29,15 @@ async function rejectsWith(fn, code, message) {
 const dataRoot = mkdtempSync(join(tmpdir(), 'dsh-smoke-sidecar-'))
 const userRoot = join(dataRoot, 'users', 'u1')
 
-// The sidecar serves exactly this one user's root, as its Pod would.
-const sidecar = buildFileService(userRoot, { bodyLimit: 8 * 1024 * 1024, logLevel: 'warn' })
+// The sidecar serves exactly this one user's root, as its Pod would, and
+// requires the per-user token the control plane presents.
+const FILE_SERVICE_SECRET = 'smoke-file-service-secret'
+process.env.DSH_SERVER_LOGIN_FILE_SERVICE_TOKEN = FILE_SERVICE_SECRET
+const sidecar = buildFileService(userRoot, {
+  bodyLimit: 8 * 1024 * 1024,
+  logLevel: 'warn',
+  token: fileServiceTokenFor(FILE_SERVICE_SECRET, 'u1'),
+})
 await sidecar.listen({ host: '127.0.0.1', port: 0 })
 const port = sidecar.server.address().port
 

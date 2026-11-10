@@ -21,7 +21,7 @@ import { LeaderElector } from './supervisor/leader.js'
 import { publicOriginForUser } from './supervisor/proxy.js'
 import { ReconcileController } from './supervisor/reconcile.js'
 import { K8sSpawner } from './supervisor/k8s-spawner.js'
-import { buildFileService, FILE_SERVICE_PORT, USER_ROOT_ENV } from './web/file-service.js'
+import { buildFileService, FILE_SERVICE_PORT, FILE_SERVICE_TOKEN_ENV, FILE_SERVICE_USER_ENV, USER_ROOT_ENV, fileServiceTokenFor } from './web/file-service.js'
 import { startTcpBridge } from './tcp-bridge.js'
 import { buildServer } from './web/server.js'
 import { DEFAULT_CENTRAL_ROUTING_CONFIG } from './config/llm-central-routing.js'
@@ -268,9 +268,27 @@ async function runFileService(): Promise<void> {
     supabaseUrl: '',
     supabaseAnonKey: '',
   })
-  const app = buildFileService(root, { bodyLimit: config.maxUploadBytes, logLevel: config.logLevel })
-  await app.listen({ host: '0.0.0.0', port: FILE_SERVICE_PORT })
-  app.log.info(`file sidecar serving ${root} on 0.0.0.0:${FILE_SERVICE_PORT}`)
+  const secret = process.env[FILE_SERVICE_TOKEN_ENV]
+  if (secret === undefined || secret === '') {
+    console.error(`file-service requires ${FILE_SERVICE_TOKEN_ENV} (shared with the control plane)`)
+    process.exit(2)
+  }
+  const serviceUser = process.env[FILE_SERVICE_USER_ENV]
+  if (serviceUser === undefined || serviceUser === '') {
+    console.error(`file-service requires ${FILE_SERVICE_USER_ENV} (the user this sidecar serves)`)
+    process.exit(2)
+  }
+  const app = buildFileService(root, {
+    bodyLimit: config.maxUploadBytes,
+    logLevel: config.logLevel,
+    token: fileServiceTokenFor(secret, serviceUser),
+  })
+  // In a Pod the kubelet and the control plane both need a non-loopback bind; a
+  // local deployment has no such caller, so it stays unreachable from the host's
+  // other interfaces.
+  const host = config.deployMode === 'k8s' ? '0.0.0.0' : '127.0.0.1'
+  await app.listen({ host, port: FILE_SERVICE_PORT })
+  app.log.info(`file sidecar serving ${root} on ${host}:${FILE_SERVICE_PORT}`)
 
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`received ${signal}, shutting down`)

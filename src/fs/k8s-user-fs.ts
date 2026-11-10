@@ -15,6 +15,7 @@ import type { Endpoint } from '../supervisor/spawner.js'
 import { POSIX, PathEscapeError, resolveWithinRoot } from '../web/middleware/fs-guard.js'
 import type { PluginInfo } from './plugins.js'
 import { isUserFsErrorCode, UserFsError, type UserFs } from './user-fs.js'
+import { FILE_SERVICE_TOKEN_ENV, FILE_SERVICE_TOKEN_HEADER, fileServiceTokenFor } from '../web/file-service.js'
 import { HOME_DIR, USERS_DIR, WORKSPACE_DIR, type FsEntry } from './workspace.js'
 
 /** Data root inside every per-user Pod (mirrors `k8s-spawner`'s POD_DATA_ROOT). */
@@ -137,9 +138,13 @@ export class K8sUserFs implements UserFs {
           path,
           method,
           agent: this.agent,
-          headers: body === undefined
-            ? {}
-            : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) },
+          headers: {
+            // The sidecar refuses any request without the shared token.
+            [FILE_SERVICE_TOKEN_HEADER]: fileServiceTokenFor(process.env[FILE_SERVICE_TOKEN_ENV] ?? '', userId),
+            ...(body === undefined
+              ? {}
+              : { 'content-type': 'application/json', 'content-length': Buffer.byteLength(body) }),
+          },
         },
         (res) => {
           const chunks: Buffer[] = []

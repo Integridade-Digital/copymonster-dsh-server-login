@@ -43,6 +43,29 @@ declare module 'fastify' {
   }
 }
 
+/**
+ * Peers whose `X-Forwarded-For` is believed.
+ *
+ * The production edge is the Cloudflare tunnel, which connects to the
+ * orchestrator over loopback; anything else reaching the port directly is a
+ * client that must not be able to name its own address. Deployments behind
+ * another proxy add it through `DSH_SERVER_LOGIN_TRUSTED_PROXIES`.
+ */
+export const TRUSTED_PROXY_PEERS: readonly string[] = ['127.0.0.1', '::1']
+
+/**
+ * Build the `trustProxy` list for a deployment.
+ *
+ * Loopback is always trusted (the tunnel/edge runs on this host); additional
+ * peers come from `DSH_SERVER_LOGIN_TRUSTED_PROXIES` as a comma-separated list.
+ *
+ * @param config - resolved server configuration.
+ * @returns the peers Fastify may read `X-Forwarded-For` from.
+ */
+export function trustedProxyPeers(config: Pick<ServerConfig, 'trustedProxyCidrs'>): readonly string[] {
+  return [...TRUSTED_PROXY_PEERS, ...config.trustedProxyCidrs]
+}
+
 const webRoot = join(dirname(fileURLToPath(import.meta.url)), '../../web')
 
 /**
@@ -76,7 +99,11 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
 
   const app = Fastify({
     logger: { level: config.logLevel },
-    trustProxy: true,
+    // Only the edge in front of this process may set `X-Forwarded-For`.
+    // `true` would make every client able to choose its own rate-limit and
+    // audit address, so the trusted peers are named explicitly and are the
+    // loopback proxy (cloudflared/tunnel) plus `config.trustedProxyCidrs`.
+    trustProxy: [...trustedProxyPeers(config)],
     bodyLimit: config.maxUploadBytes,
   })
 

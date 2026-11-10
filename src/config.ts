@@ -33,6 +33,11 @@ export interface ServerConfig {
   dshCommand: string[]
   /** Pino log level. */
   logLevel: string
+  /**
+   * Extra peers allowed to set `X-Forwarded-For`; loopback is always trusted.
+   * Empty means only the local edge (the tunnel) may name a client address.
+   */
+  trustedProxyCidrs: string[]
   /** Set the `Secure` flag on session cookies (enable behind HTTPS). */
   secureCookies: boolean
   /** Session lifetime in seconds. */
@@ -124,6 +129,8 @@ export interface ConfigOverrides {
   dataRoot?: string
   dshCommand?: string[]
   logLevel?: string
+  /** Extra trusted proxy peers (`DSH_SERVER_LOGIN_TRUSTED_PROXIES`, comma-separated). */
+  trustedProxyCidrs?: string[]
   secureCookies?: boolean
   sessionTtlSeconds?: number | string
   maxUploadBytes?: number | string
@@ -360,6 +367,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     dataRoot,
     dshCommand: overrides.dshCommand ?? (dshBin !== undefined ? [dshBin] : DEFAULT_DSH_COMMAND),
     logLevel: overrides.logLevel ?? DEFAULT_LOG_LEVEL,
+    trustedProxyCidrs: overrides.trustedProxyCidrs ?? parseCidrs(process.env.DSH_SERVER_LOGIN_TRUSTED_PROXIES),
     secureCookies:
       overrides.secureCookies ?? toBool(process.env.DSH_SERVER_LOGIN_SECURE_COOKIES, false),
     sessionTtlSeconds: Number(
