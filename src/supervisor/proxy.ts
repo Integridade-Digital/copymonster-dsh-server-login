@@ -19,7 +19,7 @@ import { connect } from 'node:net'
 import { requireAuth, resolveSessionClaims, resolveSessionUser } from '../web/middleware/authn.js'
 import type { SessionClaims } from '../web/session-cookie.js'
 import { IDENTITY_TTL_MS } from '../identity.js'
-import type { Endpoint } from './spawner.js'
+import { ProvisioningConflict, type Endpoint, type TenantState } from './spawner.js'
 import { renderPatch } from './patch.js'
 
 // Keep-alive pool for per-user DSH upstreams. Replaced (not just destroyed) on a
@@ -105,7 +105,17 @@ function realOrigin(headers: IncomingHttpHeaders): string | undefined {
 /** A subdomain resolution: a tunnelable endpoint, an error to return, or null (not a subdomain). */
 type SubdomainAccess =
   | { endpoint: Endpoint; userId: string; publicHost: string; identity: string }
-  | { error: string; code: number }
+  | {
+      error: string
+      code: number
+      /** Tenant that owns the subdomain, when the lookup got that far. */
+      userId?: string
+      username?: string
+      /** Lifecycle of that tenant's instance: stopped, starting, running, failed. */
+      state?: TenantState
+      /** Last launch failure, when the state is `failed`. */
+      lastError?: string
+    }
   | null
 
 /**
@@ -169,7 +179,17 @@ async function resolveSubdomainAccess(
     return { error: 'reauthentication-required', code: 401 }
   }
   const endpoint = await app.supervisor.endpointFor(user.id)
-  if (endpoint === undefined) return { error: 'not_running', code: 404 }
+  if (endpoint === undefined) {
+    const lifecycle = await app.supervisor.lifecycle?.(user.id)
+    return {
+      error: 'not_running',
+      code: 404,
+      userId: user.id,
+      username: user.username,
+      state: lifecycle?.state ?? 'stopped',
+      lastError: lifecycle?.lastError,
+    }
+  }
   return { endpoint, userId: user.id, publicHost: `${slug}.${app.config.baseDomain}`, identity }
 }
 
@@ -251,6 +271,27 @@ function proxyHttp(
 
 const launchingHtmlPath = join(dirname(fileURLToPath(import.meta.url)), '../../web/launching.html')
 let cachedLaunchingHtml = ''
+/**
+ * Page shown when the tenant's last launch was refused.
+ *
+ * Names the state and offers a retry; the reason shown to the browser is the
+ * stable category, never host paths or another tenant's identifiers.
+ * @param lastError - stable category recorded by the supervisor.
+ * @returns the HTML body.
+ */
+function getFailureHtml(lastError: string | undefined): string {
+  const reason = lastError === undefined || lastError === ''
+    ? 'unknown'
+    : lastError.replace(/[<>&"']/g, '')
+  const retry = `<button type="button" onclick="location.reload()">Tentar novamente</button>`
+  return `<!doctype html><html lang="pt"><head><meta charset="utf-8">`
+    + `<meta name="viewport" content="width=device-width,initial-scale=1">`
+    + `<title>Workspace indisponível</title></head><body>`
+    + `<h1>Não foi possível iniciar o seu workspace</h1>`
+    + `<p>A preparação desta conta falhou. A equipa já tem o registo do erro e vai verificar.</p>`
+    + `<p><code>${reason}</code></p>${retry}</body></html>`
+}
+
 function getLaunchingHtml(): string {
   if (!cachedLaunchingHtml) {
     try {
@@ -305,6 +346,24 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     const access = await resolveSubdomainAccess(app, clientHost(request.headers), request.headers.cookie)
     if (access === null) return
     if ('error' in access) {
+      // A browser asking for a page, rather than an API client asking for JSON.
+      const wantsHtml = request.method === 'GET'
+        && ((request.headers.accept ?? '').includes('text/html') || request.raw.url === '/' || request.raw.url === '')
+
+      if (access.error === 'not_running' && access.state === 'failed' && wantsHtml) {
+        // The last launch was refused (for example, the Linux account belongs to
+        // another uid). Serving the launching page again would spin forever;
+        // report the state and let the operator retry.
+        reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').code(503)
+          .send(getFailureHtml(access.lastError))
+        return
+      }
+
+      if (access.error === 'not_running' && access.state === 'starting' && wantsHtml) {
+        reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(getLaunchingHtml())
+        return
+      }
+
       if (access.error === 'not_running' && request.method === 'GET' && ((request.headers.accept ?? '').includes('text/html') || request.raw.url === '/' || request.raw.url === '')) {
         const slug = parseSubdomain(clientHost(request.headers), app.config.baseDomain)
         if (slug) {
@@ -317,14 +376,32 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
               user.id,
               folderAbs,
               app.config.enablePatch ? renderPatch([]) : undefined,
-            ).catch((err) => {
-              app.log.error(err, `[dsh-proxy] auto-launch failed for user ${user.id}`)
+            ).catch((err: unknown) => {
+              // Log the tenant, the expected and actual identity, and the reason;
+              // never the tenant's own data.
+              const expectedUid = user.uid ?? hashUid(user.id, app.config.baseUid)
+              app.log.error({
+                tenant: user.username,
+                userId: user.id,
+                expectedUid,
+                actualUid: err instanceof ProvisioningConflict ? err.actual : undefined,
+                reason: err instanceof Error ? err.name : 'Error',
+              }, '[dsh-proxy] auto-launch failed')
             })
             reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(getLaunchingHtml())
             return
           }
         }
       }
+      if ((access.error === 'unauthorized' || access.error === 'unknown_user') && wantsHtml) {
+        // A first visit — a bookmark, an e-mail link, a shared URL — arrives
+        // before the SSO exchange created the local user and set the cookie.
+        // JSON here reads as a broken subdomain; send the browser to sign in,
+        // which is what creates the tenant on the way back.
+        reply.header('cache-control', 'no-store').redirect(app.config.mainAppUrl, 302)
+        return
+      }
+
       if (access.error === 'reauthentication-required' && request.method === 'GET'
         && ((request.headers.accept ?? '').includes('text/html') || request.raw.url === '/' || request.raw.url === '')) {
         // A session issued before the identity handshake cannot be signed;

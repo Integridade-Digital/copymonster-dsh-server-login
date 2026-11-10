@@ -40,14 +40,43 @@ const DOMAIN_COLS = 'id, user_id, domain, verified, nginx_config, updated_at'
 const INSTANCE_COLS =
   'id, user_id, workspace_id, role, pid, port, status, started_at, last_exit, exit_code, last_error, folder, patch'
 
+/**
+ * Allocate the next Linux uid from the persistent sequence.
+ *
+ * The sequence only moves forward, so a removed user's uid is never handed to a
+ * new tenant. It starts one past the highest uid already assigned, which keeps
+ * existing accounts compatible with the rowid-derived values.
+ *
+ * @param db - open database.
+ * @param baseUid - first uid of the tenant range.
+ * @returns the allocated uid.
+ */
+export function nextUid(db: Database, baseUid: number): number {
+  const row = prepare(db, "SELECT next_value FROM uid_sequence WHERE name = 'users'").get() as
+    | { next_value: number }
+    | undefined
+
+  if (row === undefined) {
+    const highest = prepare(db, 'SELECT MAX(uid) AS max_uid FROM users WHERE uid IS NOT NULL').get() as
+      | { max_uid: number | null }
+      | undefined
+    const first = Math.max(baseUid + 1, Number(highest?.max_uid ?? 0) + 1)
+    prepare(db, "INSERT INTO uid_sequence (name, next_value) VALUES ('users', ?)").run(first + 1)
+    return first
+  }
+
+  const uid = Number(row.next_value)
+  prepare(db, "UPDATE uid_sequence SET next_value = ? WHERE name = 'users'").run(uid + 1)
+  return uid
+}
+
 export function createUser(db: Database, input: CreateUserInput, baseUid: number): User {
   const createdAt = Date.now()
   return db.transaction((): User => {
-    const info = prepare(db,
+    prepare(db,
       'INSERT INTO users (id, username, pass_hash, role, home_dir, created_at) VALUES (?, ?, ?, ?, ?, ?)',
     ).run(input.id, input.username, input.passHash, input.role, input.homeDir, createdAt)
-    // SQLite's implicit rowid is the per-user incrementing integer; uid = baseUid + it.
-    const uid = baseUid + Number(info.lastInsertRowid)
+    const uid = nextUid(db, baseUid)
     prepare(db, 'UPDATE users SET uid = ? WHERE id = ?').run(uid, input.id)
     return {
       id: input.id,

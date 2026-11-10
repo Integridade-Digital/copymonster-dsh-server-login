@@ -252,6 +252,24 @@ const PG_V7 = `
 ALTER TABLE users ADD COLUMN llm_mask_version INTEGER;
 `
 
+// v8: a persistent uid sequence. `uid` used to be derived from SQLite's rowid,
+// which SQLite reuses after a delete: removing a user and adding another handed
+// out a uid still owned by a Linux account, so `useradd` failed or, worse, the
+// new tenant inherited the old tenant's files.
+const SQLITE_V8 = `
+CREATE TABLE IF NOT EXISTS uid_sequence (
+  name TEXT PRIMARY KEY,
+  next_value INTEGER NOT NULL
+);
+`
+
+const PG_V8 = `
+CREATE TABLE IF NOT EXISTS uid_sequence (
+  name TEXT PRIMARY KEY,
+  next_value BIGINT NOT NULL
+);
+`
+
 interface Migration {
   version: number
   name: string
@@ -267,6 +285,7 @@ const MIGRATIONS: readonly Migration[] = [
   { version: 5, name: 'supabase sub link', sqlite: SQLITE_V5, pg: PG_V5 },
   { version: 6, name: 'plan resource limits', sqlite: SQLITE_V6, pg: PG_V6 },
   { version: 7, name: 'llm mask backfill checkpoint', sqlite: SQLITE_V7, pg: PG_V7 },
+  { version: 8, name: 'monotonic uid sequence', sqlite: SQLITE_V8, pg: PG_V8 },
 ]
 
 /** Apply unapplied SQLite migrations inside a single transaction. */

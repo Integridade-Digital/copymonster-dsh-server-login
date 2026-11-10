@@ -85,7 +85,11 @@ function makeApp(db, overrides = {}) {
   app.decorate('db', db)
   app.decorate('config', config)
   app.decorate('userFs', { initUserRoot: async () => {} })
-  app.decorate('supervisor', { restartMain: async () => {} })
+  app.decorate('supervisor', {
+    restartMain: async () => {},
+    // Provisioning runs during the exchange so a conflict fails there.
+    ensureFileService: overrides.ensureFileService ?? (async () => {}),
+  })
   app.decorateRequest('user', null)
   app.register(authRoutes)
   return app

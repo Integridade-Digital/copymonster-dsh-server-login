@@ -35,6 +35,42 @@ export interface Instance {
   scopeUnit?: string
 }
 
+/**
+ * A tenant whose Linux account exists with a different identity than the
+ * database records. Launching it would give one tenant another tenant's files,
+ * so provisioning stops and reports the mismatch instead of reusing the account.
+ */
+export class ProvisioningConflict extends Error {
+  constructor(
+    /** Tenant whose account is inconsistent. */
+    readonly tenant: string,
+    /** What disagreed: the account's uid, name, or group id. */
+    readonly mismatch: 'uid' | 'name' | 'gid',
+    /** Value found on the host. */
+    readonly actual: string | number | undefined,
+    /** Value the database expects. */
+    readonly expected: string | number,
+  ) {
+    super(`provisioning conflict for ${tenant}: ${mismatch} is ${String(actual)}, expected ${String(expected)}`)
+    this.name = 'ProvisioningConflict'
+  }
+}
+
+/** A provisioning step failed for a reason other than an identity mismatch. */
+export class ProvisioningError extends Error {
+  constructor(
+    /** Tenant being provisioned. */
+    readonly tenant: string,
+    message: string,
+  ) {
+    super(message)
+    this.name = 'ProvisioningError'
+  }
+}
+
+/** Tenant lifecycle as reported by `GET /api/dsh/status`. */
+export type TenantState = 'stopped' | 'starting' | 'running' | 'failed'
+
 /** Thrown when a user already has a running main DSH. */
 export class AlreadyRunningError extends Error {
   constructor(userId: string) {
@@ -82,11 +118,21 @@ export interface Spawner {
   spawnWatchdog(userId: string): Promise<Instance | undefined>
   status(userId: string): Promise<UserStatus>
   endpointFor(userId: string): Promise<Endpoint | undefined>
+  /**
+   * Lifecycle state of the tenant's instance. A backend that cannot report it
+   * omits the method and the proxy assumes `stopped`.
+   */
+  lifecycle?(userId: string): Promise<{ state: TenantState; lastError?: string }>
   stop(userId: string): Promise<void>
   teardown(): Promise<void>
   /** Make the user's file sidecar exist and be ready (k8s). No-op under local,
    * where the control plane touches the volume in-process. */
   ensureFileService(userId: string): Promise<void>
+  /**
+   * Create the tenant's Linux account, without launching it. Backends without
+   * OS accounts omit the method and the exchange skips the check.
+   */
+  ensureLinuxAccount?(userId: string): Promise<void>
   registerWebSocket?(userId: string, socket: any): void
   touchActivity?(userId: string): void
 }

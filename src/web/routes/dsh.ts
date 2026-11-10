@@ -163,9 +163,14 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
       }
       const { main, watchdog } = status
       const isRunning = main?.status === 'running'
+      // Lifecycle beyond "is it running": a refused launch reports `failed` with
+      // a stable reason instead of looking like a tenant that never started.
+      const lifecycle = await app.supervisor.lifecycle?.(request.user!.id)
       const result = {
         running: isRunning,
         status: main?.status ?? 'stopped',
+        state: lifecycle?.state ?? (isRunning ? 'running' : 'stopped'),
+        lastError: lifecycle?.lastError,
         instance: main
           ? { id: main.id, port: main.port, status: main.status, exitCode: main.exitCode, lastError: main.lastError }
           : null,

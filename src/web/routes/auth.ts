@@ -133,7 +133,9 @@ async function exchangeSupabaseSession(
   if (typeof sub !== 'string' || !/^[A-Za-z0-9_-]{8,64}$/.test(sub)) {
     return { ok: false, reason: 'unavailable' }
   }
-  if (typeof username !== 'string' || !/^[a-z0-9-]{1,32}$/.test(username)) {
+  // The main app enforces the same 4–30 character slug; accepting a longer one
+  // here would store a username that can never resolve as a subdomain.
+  if (typeof username !== 'string' || !TENANT_SLUG_PATTERN.test(username)) {
     return { ok: false, reason: 'unavailable' }
   }
   const planSlug = record.plan_slug
@@ -188,6 +190,15 @@ async function issueSession(
     sessionCookie(token, app.config.sessionTtlSeconds, app.config.secureCookies, app.config.cookieDomain),
   )
 }
+
+/**
+ * Tenant slug accepted from the main app: 4–30 characters, lower-case letters,
+ * digits and inner hyphens.
+ *
+ * Mirrors `is_tenant_slug_available()` (migration 043) and the registration form,
+ * so the orchestrator never stores a username that cannot be a subdomain.
+ */
+export const TENANT_SLUG_PATTERN = /^[a-z0-9][a-z0-9-]{2,28}[a-z0-9]$/
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   // The browser login page runs on the main app origin and calls this route on
@@ -261,7 +272,18 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           })
           await app.db.setUserSupabaseSub(sub, sub)
           user.supabase_sub = sub
-          await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username))
+          try {
+            await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username))
+            // Create the Linux account and its home now, while the operator is
+            // still on the login screen: a provisioning conflict then surfaces
+            // as a clear error here instead of an endless launching page.
+            await app.supervisor.ensureLinuxAccount?.(user.id)
+            await app.supervisor.ensureFileService(user.id)
+          } catch (error: unknown) {
+            const reason = error instanceof Error ? error.name : 'Error'
+            await app.db.audit(sub, 'sso_provision_failed', JSON.stringify({ username, reason }))
+            return reply.code(503).send({ error: 'workspace_provisioning_failed' })
+          }
           await app.db.audit(sub, 'sso_provision', JSON.stringify({ username }))
         }
       }

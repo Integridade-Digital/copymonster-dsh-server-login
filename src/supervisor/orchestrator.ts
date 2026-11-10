@@ -30,11 +30,14 @@ import { createPortGuard, type PortGuard } from './firewall.js'
 import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
 import {
   AlreadyRunningError,
+  ProvisioningConflict,
+  ProvisioningError,
   type Endpoint,
   type Instance,
   type InstanceRole,
   type InstanceStatus,
   type Spawner,
+  type TenantState,
   type UserStatus,
 } from './spawner.js'
 
@@ -78,9 +81,26 @@ export function staleScopeUnits(entries: readonly string[], stem: string): strin
  * Local backend: owns the lifecycle of per-user DSH process pairs via
  * child_process. State is in-memory. Implements {@link Spawner}.
  */
+/**
+ * Stable reason text for a failed spawn, kept free of paths and personal data.
+ * @param error - the thrown failure.
+ * @returns the error name plus its first line.
+ */
+function describeSpawnFailure(error: unknown): string {
+  if (error instanceof ProvisioningConflict) return `${error.name}:${error.mismatch}`
+  if (error instanceof ProvisioningError) return error.name
+  const name = error instanceof Error ? error.name : 'Error'
+  const line = error instanceof Error ? error.message.split('\n')[0] ?? '' : String(error)
+  return line === '' ? name : `${name}: ${line.slice(0, 200)}`
+}
+
 export class LocalSpawner implements Spawner {
   private readonly mains = new Map<string, Instance>()
   private readonly watchdogs = new Map<string, Instance>()
+  /** Tenants with a spawn in flight, so a failed spawn never looks running. */
+  private readonly starting = new Set<string>()
+  /** Last failure per tenant, cleared by a successful launch. */
+  private readonly failures = new Map<string, string>()
   private readonly children = new Map<string, ChildProcess>()
   private readonly restartTimers = new Map<string, NodeJS.Timeout>()
   private readonly activeWsSockets = new Map<string, Set<any>>()
@@ -104,47 +124,167 @@ export class LocalSpawner implements Spawner {
     this.reapOrphanScopes()
   }
 
-  /** Ensure the Linux user/group for the tenant's UID exists (idempotent). */
+  /**
+   * Ensure the Linux user/group for the tenant's UID exists (idempotent).
+   *
+   * Resolves the account by name *and* by uid before touching anything: when
+   * either exists with a value that does not match the database, the tenant's
+   * files and processes belong to another identity, and creating or reusing the
+   * account would hand one tenant another tenant's home. That case throws a
+   * {@link ProvisioningConflict} instead of continuing.
+   */
   private async provisionLinuxUser(userId: string): Promise<void> {
     const uid = await this.resolveUid(userId)
     const user = await this.db.findUserById(userId)
     const username = user?.username ?? `user-${uid}`
 
-    try {
-      execFileSync('id', ['-u', String(uid)], { stdio: 'ignore' })
-      return // already exists
-    } catch {
-      // user doesn't exist, create it
+    const byName = this.accountId('-u', username)
+    const byUid = this.accountName(uid)
+
+    if (byName !== undefined && byName !== uid) {
+      throw new ProvisioningConflict(userId, 'uid', byName, uid)
+    }
+    if (byUid !== undefined && byUid !== username) {
+      throw new ProvisioningConflict(userId, 'name', byUid, username)
+    }
+    if (byName === uid && byUid === username) {
+      await this.assertGroup(uid, username)
+      return
     }
 
-    try {
-      execFileSync('groupadd', ['-g', String(uid), username], { stdio: 'ignore' })
-    } catch {
-      // group might already exist
-    }
-
-    try {
-      execFileSync('useradd', [
-        '-u', String(uid),
-        '-g', String(uid),
-        '-d', userRoot(this.config.dataRoot, userId),
-        '-M',
-        '-s', '/bin/bash',
-        username
-      ], { stdio: 'ignore' })
-    } catch (e) {
-      // race condition: another process created it
+    // Group first, and only when both its id and its name are free.
+    const groupName = this.groupName(uid)
+    if (groupName === undefined) {
       try {
-        execFileSync('id', ['-u', String(uid)], { stdio: 'ignore' })
-      } catch {
-        throw e
+        execFileSync('groupadd', ['-g', String(uid), username], { stdio: 'ignore' })
+      } catch (error: unknown) {
+        const detail = error instanceof Error ? error.message : String(error)
+        throw new ProvisioningError(userId, `groupadd failed for gid ${uid}: ${detail}`)
+      }
+    } else if (groupName !== username && byName === undefined) {
+      // The gid belongs to an unrelated group; sharing it would put the tenant
+      // in that group.
+      throw new ProvisioningConflict(userId, 'gid', groupName, username)
+    }
+
+    if (byName === undefined) {
+      try {
+        execFileSync('useradd', [
+          '-u', String(uid),
+          '-g', String(uid),
+          '-d', userRoot(this.config.dataRoot, userId),
+          '-M',
+          '-s', '/bin/bash',
+          username
+        ], { stdio: 'ignore' })
+      } catch (error: unknown) {
+        // A concurrent spawn may have won the race; accept only a verified match.
+        const retryName = this.accountId('-u', username)
+        const retryUid = this.accountName(uid)
+        if (retryName !== uid || retryUid !== username) {
+          const detail = error instanceof Error ? error.message : String(error)
+          throw new ProvisioningError(userId, `useradd failed for uid ${uid} (${username}): ${detail}`)
+        }
       }
     }
+
+    await this.assertGroup(uid, username)
+    const actualUid = this.accountId('-u', username)
+    if (actualUid !== uid) {
+      throw new ProvisioningConflict(userId, 'uid', actualUid, uid)
+    }
+  }
+
+  /** Gid an existing group name resolves to, or undefined when absent. */
+  private groupName(gid: number): string | undefined {
+    try {
+      const name = String(execFileSync('getent', ['group', String(gid)], { stdio: 'pipe' })).trim().split(':')[0]
+      return name === undefined || name === '' ? undefined : name
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Verify the tenant's primary group is its own gid. */
+  private async assertGroup(uid: number, username: string): Promise<void> {
+    try {
+      const line = String(execFileSync('getent', ['group', username], { stdio: 'pipe' })).trim()
+      const gid = Number(line.split(':')[2])
+      if (gid !== uid) throw new ProvisioningConflict(username, 'gid', String(gid), String(uid))
+    } catch (error: unknown) {
+      if (error instanceof ProvisioningConflict) throw error
+      throw new ProvisioningError(username, `group ${username} is missing for gid ${uid}`)
+    }
+  }
+
+  /** Uid recorded for a local account name, or undefined when absent. */
+  private accountId(idFlag: string, name: string): number | undefined {
+    try {
+      const value = Number(String(execFileSync('id', [idFlag, name], { stdio: 'pipe' })).trim())
+      return Number.isFinite(value) ? value : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Account name owning a local uid, or undefined when the uid is free. */
+  private accountName(uid: number): string | undefined {
+    try {
+      const value = String(execFileSync('getent', ['passwd', String(uid)], { stdio: 'pipe' })).trim()
+      const name = value.split(':')[0]
+      return name === undefined || name === '' ? undefined : name
+    } catch {
+      return undefined
+    }
+  }
+
+  /** Current main + watchdog for a user. */
+  async status(userId: string): Promise<UserStatus> {
+    return { main: this.mains.get(userId), watchdog: this.watchdogs.get(userId) }
+  }
+
+  /**
+   * Lifecycle state of a tenant's instance, for `GET /api/dsh/status`.
+   *
+   * Distinct from {@link endpointFor}: `starting` means a spawn is in flight,
+   * `failed` means the last spawn or provisioning attempt was refused, and
+   * `stopped` means nothing ran. The proxy needs the difference to decide
+   * between "wait", "report an error", and "launch".
+   */
+  async lifecycle(userId: string): Promise<{ state: TenantState; lastError?: string }> {
+    if (this.starting.has(userId)) return { state: 'starting' }
+    const failure = this.failures.get(userId)
+    if (failure !== undefined) return { state: 'failed', lastError: failure }
+    const instance = this.mains.get(userId)
+    if (instance === undefined) return { state: 'stopped' }
+    return { state: instance.status === 'running' ? 'running' : 'starting' }
+  }
+
+  /** Last recorded failure for a tenant, or undefined after a clean launch. */
+  lastErrorFor(userId: string): string | undefined {
+    return this.failures.get(userId)
+  }
+
+  /**
+   * Provision the tenant's Linux account without spawning anything.
+   *
+   * The SSO exchange calls this so a uid conflict fails the login instead of
+   * leaving the browser on the launching page.
+   * @param userId - tenant whose account must exist.
+   * @throws ProvisioningConflict when the host account disagrees with the database.
+   * @throws ProvisioningError when `groupadd`/`useradd` fail for another reason.
+   */
+  async ensureLinuxAccount(userId: string): Promise<void> {
+    if (this.config.isolationMode !== 'account') return
+    await this.provisionLinuxUser(userId)
   }
 
   /** Spawn the resident main DSH for a user (watchdog is pulled up on demand). */
   async launch(userId: string, folder: string, patch?: string): Promise<Instance> {
     if (this.mains.has(userId)) throw new AlreadyRunningError(userId)
+    // A spawn already in flight owns this tenant; a second caller waits for the
+    // same attempt instead of racing it.
+    if (this.starting.has(userId)) throw new AlreadyRunningError(userId)
     const inst = await this.spawnInstance(userId, 'main', folder, patch)
     this.scheduleIdleShutdown(userId)
     return inst
@@ -165,11 +305,6 @@ export class LocalSpawner implements Spawner {
     const main = this.mains.get(userId)
     if (main === undefined) return undefined
     return await this.spawnInstance(userId, 'watchdog', main.folder, main.patch)
-  }
-
-  /** Current main + watchdog for a user. */
-  async status(userId: string): Promise<UserStatus> {
-    return { main: this.mains.get(userId), watchdog: this.watchdogs.get(userId) }
   }
 
   /** Endpoint the proxy forwards to (local → the running main's loopback port). */
@@ -332,7 +467,13 @@ export class LocalSpawner implements Spawner {
       patch,
     }
     const map = role === 'main' ? this.mains : this.watchdogs
-    map.set(userId, instance)
+    // Registered before the spawn so a concurrent caller sees the attempt, but
+    // removed again on failure: a rejected spawn must never leave an entry that
+    // makes every later launch throw AlreadyRunningError.
+    if (isMain) {
+      this.starting.add(userId)
+      this.failures.delete(userId)
+    }
 
     const [command = 'dsh', ...args] = this.config.dshCommand
     const launchArgs = ['--profile', role === 'main' ? 'web' : 'headless']
@@ -359,10 +500,21 @@ export class LocalSpawner implements Spawner {
       env.DSH_SERVER_LOGIN_PORT = String(port)
     }
 
-    const child = await this.spawnAsUser(userId, role, command, [...args, ...launchArgs], { cwd: folder, env })
-    instance.scopeUnit = child.scopeUnit
-    this.trackChild(userId, instance, child.child)
-    return instance
+    try {
+      const child = await this.spawnAsUser(userId, role, command, [...args, ...launchArgs], { cwd: folder, env })
+      instance.scopeUnit = child.scopeUnit
+      this.trackChild(userId, instance, child.child)
+      map.set(userId, instance)
+      return instance
+    } catch (error: unknown) {
+      if (isMain) {
+        this.starting.delete(userId)
+        this.failures.set(userId, describeSpawnFailure(error))
+      }
+      throw error
+    } finally {
+      if (isMain) this.starting.delete(userId)
+    }
   }
 
   /** Spawn the child, optionally through the account-level setuid wrapper.
