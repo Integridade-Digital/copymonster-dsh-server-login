@@ -95,6 +95,7 @@ function sso(app, body) {
   return app.inject({
     method: 'POST',
     url: '/api/auth/session-token',
+    headers: { authorization: 'Bearer valid.jwt.token' },
     payload: body,
   })
 }
@@ -169,7 +170,7 @@ test('sso: an existing username bound to another subject is rejected', async (t)
   assert.equal(res.json().error, 'username-taken-by-another-user')
 })
 
-test('sso: an existing unlinked username is adopted and linked', async (t) => {
+test('sso: an existing unlinked username is not adopted; the exchange returns 409', async (t) => {
   const db = makeDb()
   const app = makeApp(db)
   t.after(() => app.close())
@@ -177,13 +178,15 @@ test('sso: an existing unlinked username is adopted and linked', async (t) => {
   stubMainApp(t, { status: 200, body: { supabase_sub: SUB, username: 'alice' } })
 
   const res = await sso(app, { supabaseJwt: 'valid.jwt.token' })
-  assert.equal(res.statusCode, 200)
+  assert.equal(res.statusCode, 409)
+  assert.equal(res.json().error, 'account_link_required')
   assert.equal(db.users.length, 1)
   assert.equal(db.users[0].id, 'local-id')
-  assert.equal(db.users[0].supabase_sub, SUB)
+  assert.equal(db.users[0].supabase_sub, null)
+  assert.equal(res.headers['set-cookie'], undefined)
 })
 
-test('sso: an existing mixed-case username is adopted case-insensitively', async (t) => {
+test('sso: an existing mixed-case unlinked username is also refused', async (t) => {
   const db = makeDb()
   const app = makeApp(db)
   t.after(() => app.close())
@@ -191,10 +194,25 @@ test('sso: an existing mixed-case username is adopted case-insensitively', async
   stubMainApp(t, { status: 200, body: { supabase_sub: SUB, username: 'alice' } })
 
   const res = await sso(app, { supabaseJwt: 'valid.jwt.token' })
-  assert.equal(res.statusCode, 200)
-  assert.equal(db.users.length, 1)
-  assert.equal(db.users[0].id, 'local-id')
-  assert.equal(db.users[0].supabase_sub, SUB)
+  assert.equal(res.statusCode, 409)
+  assert.equal(res.json().error, 'account_link_required')
+  assert.equal(db.users[0].supabase_sub, null)
+})
+
+test('sso: a slug owned by a password-only account stays unlinked after the refusal', async (t) => {
+  const db = makeDb()
+  const app = makeApp(db)
+  t.after(() => app.close())
+  await db.createUser({ id: 'local-id', username: 'colisao', passHash: 'x', role: 'active', homeDir: '/tmp/c' })
+  stubMainApp(t, { status: 200, body: { supabase_sub: SUB, username: 'colisao' } })
+
+  const first = await sso(app, { supabaseJwt: 'valid.jwt.token' })
+  assert.equal(first.statusCode, 409)
+  assert.equal(first.json().error, 'account_link_required')
+
+  const second = await sso(app, { supabaseJwt: 'valid.jwt.token' })
+  assert.equal(second.statusCode, 409)
+  assert.equal(db.users.filter((u) => u.id === SUB).length, 0)
 })
 
 test('sso: a token the main app rejects returns 401', async (t) => {

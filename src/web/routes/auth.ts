@@ -52,10 +52,13 @@ interface Credentials {
 }
 
 const sessionTokenSchema = {
+  // The tenant subdomain calls this route cross-origin, so the browser sends an
+  // OPTIONS preflight with `access-control-request-headers` but no credentials.
+  // Those extra headers must not be rejected here; the handler still requires a
+  // bearer token of its own.
   headers: {
     type: 'object',
     required: ['authorization'],
-    additionalProperties: false,
     properties: {
       authorization: { type: 'string', pattern: '^Bearer .+$' },
     },
@@ -237,12 +240,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           if (byName.supabase_sub !== null) {
             return reply.code(403).send({ error: 'username-taken-by-another-user' })
           }
-          if (byName.role === 'disabled') return reply.code(403).send({ error: 'disabled' })
-          if (byName.role === 'pending') return reply.code(403).send({ error: 'pending_review' })
-          await app.db.setUserSupabaseSub(byName.id, sub)
-          byName.supabase_sub = sub
-          user = byName
-          await app.db.audit(byName.id, 'sso_link', null)
+          // A local password-only account with this slug is not proof that the
+          // Supabase caller owns it. Linking it on the SSO exchange would hand
+          // the workspace to whoever registers that slug in the main app, so the
+          // exchange stops here and the owner must link explicitly.
+          await app.db.audit(byName.id, 'sso_link_refused', JSON.stringify({ username, reason: 'account_link_required' }))
+          return reply.code(409).send({ error: 'account_link_required' })
         } else {
           if ((await app.db.findUserById(sub)) !== undefined) {
             return reply.code(403).send({ error: 'username-taken-by-another-user' })
