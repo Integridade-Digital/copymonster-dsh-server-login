@@ -54,6 +54,26 @@ declare module 'fastify' {
 export const TRUSTED_PROXY_PEERS: readonly string[] = ['127.0.0.1', '::1']
 
 /**
+ * Content-Security-Policy for pages this process serves itself (the launching
+ * page and error pages).
+ *
+ * `unsafe-inline` covers the inline reload script of the launching page and
+ * `unsafe-eval` the JSON hydration some static pages rely on; the tenant DSH is
+ * a separate origin and keeps its own policy.
+ */
+export const ORCHESTRATOR_CSP = [
+  "default-src 'self'",
+  "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self'",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "form-action 'self'",
+].join('; ')
+
+/**
  * Build the `trustProxy` list for a deployment.
  *
  * Loopback is always trusted (the tunnel/edge runs on this host); additional
@@ -135,6 +155,17 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   // Reverse proxy (subdomain + legacy subpath). Registered first so its global
   // onRequest hook intercepts per-user subdomain traffic before other hooks.
   await registerDshProxy(app)
+
+  // Security headers for this process's own responses. The proxied tenant DSH
+  // sends its own; these cover HTML and JSON from the orchestrator itself.
+  app.addHook('onSend', async (_request, reply, payload) => {
+    reply.header('x-content-type-options', 'nosniff')
+    reply.header('x-frame-options', 'DENY')
+    reply.header('referrer-policy', 'strict-origin-when-cross-origin')
+    reply.header('strict-transport-security', 'max-age=31536000; includeSubDomains')
+    reply.header('content-security-policy', ORCHESTRATOR_CSP)
+    return payload
+  })
 
   app.addHook('onClose', async () => {
     await supervisor.teardown()
