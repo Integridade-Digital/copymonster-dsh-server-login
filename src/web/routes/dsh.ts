@@ -32,6 +32,24 @@ const restartSchema = {
   },
 } as const
 
+/**
+ * Characters a restart handoff command may contain.
+ *
+ * The handoff is written into the tenant's workspace and executed by the
+ * tenant's own process, so it must not smuggle shell metacharacters or a path
+ * escape into that context.
+ */
+const HANDOFF_COMMAND_PATTERN = '^[A-Za-z0-9 _.:/@,=+-]{1,512}$'
+
+/**
+ * Whether a restart handoff command is a plain command line.
+ * @param command - the caller-supplied command text.
+ * @returns true when it contains only safe characters and length.
+ */
+function isSafeHandoffCommand(command: string): boolean {
+  return new RegExp(HANDOFF_COMMAND_PATTERN).test(command)
+}
+
 const STATUS_TIMEOUT = Symbol('status-timeout')
 const STATUS_OPERATION_TIMEOUT_MS = 5000
 
@@ -114,6 +132,9 @@ export const dshRoutes: FastifyPluginAsync = async (app) => {
 
   app.post('/api/dsh/restart', { preHandler: requireAuth, schema: restartSchema }, async (request, reply) => {
     const { command } = request.body as { command: string }
+    if (!isSafeHandoffCommand(command)) {
+      return reply.code(400).send({ error: 'invalid_command' })
+    }
     const user = request.user!
     await app.userFs.writeHandoff(user.id, JSON.stringify({ command, createdAt: Date.now() }))
     const instance = await app.supervisor.restartMain(user.id)

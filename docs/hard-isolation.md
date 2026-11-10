@@ -40,7 +40,7 @@ DSH_SERVER_LOGIN_BASE_UID=100000
 
 | 变量 | 值 | 解释 |
 |---|---|---|
-| `DSH_SERVER_LOGIN_ISOLATION_MODE` | `account` | 开启账号级隔离（默认 `soft`）。 |
+| `DSH_SERVER_LOGIN_ISOLATION_MODE` | `account` | 账号级隔离（自本版本起为默认；`NODE_ENV=production` 下显式设为 `soft` 会拒绝启动）。 |
 | `DSH_SERVER_LOGIN_BASE_UID` | `100000` | 每个用户 uid 的「起始数字」。系统 uid 一般 < 1000，这里从 10 万开始，避免撞系统账号。 |
 
 改完**重启编排服务**让配置生效：

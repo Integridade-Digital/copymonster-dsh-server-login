@@ -11,7 +11,7 @@
 
 import { randomUUID } from 'node:crypto'
 import { parseArgs } from 'node:util'
-import { resolveConfig, type ConfigOverrides } from './config.js'
+import { assertProductionIsolation, resolveConfig, type ConfigOverrides } from './config.js'
 import { createDbAdapter } from './db/index.js'
 import { createUserFs } from './fs/provider.js'
 import { homeRoot, userRoot } from './fs/workspace.js'
@@ -216,6 +216,7 @@ async function runServer(args: string[]): Promise<void> {
   }
 
   const config = resolveConfig(toOverrides(values as ParsedValues))
+  assertProductionIsolation(config)
   const app = await buildServer(config)
   await app.listen({ host: config.host, port: config.port })
 

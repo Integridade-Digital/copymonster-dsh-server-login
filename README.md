@@ -84,9 +84,9 @@ node lib/cli.js --port 3080 --db ./dev.local.db
 | `DSH_SERVER_LOGIN_PORT` | `3080` | 编排服务绑定端口（nginx 上游） |
 | `DSH_SERVER_LOGIN_DATA_ROOT` | `~/.dsh-server-login` | 每用户 home/workspace 根（生产 `/var/lib/dsh-server-login`） |
 | `DSH_SERVER_LOGIN_DSH_BIN` | `dsh` | 子 DSH 可执行文件（建议绝对路径，systemd 下 PATH 精简） |
-| `DSH_SERVER_LOGIN_ISOLATION_MODE` | `soft` | `soft` 软隔离 / `account` 账号级硬隔离（Linux，需 root） |
+| `DSH_SERVER_LOGIN_ISOLATION_MODE` | `account` | `account` 账号级硬隔离（Linux，需 root）/ `soft` 软隔离（仅开发机；`NODE_ENV=production` 时拒绝启动） |
 | `DSH_SERVER_LOGIN_BASE_UID` | `100000` | 账号级隔离的 uid 基数 |
-| `DSH_SERVER_LOGIN_PORT_GUARD` | `false` | iptables owner-match 端口守卫（Linux+root）：阻止同机其他账号直连各用户 DSH 的回环端口；不支持的环境下开启会拒绝启动（fail loud） |
+| `DSH_SERVER_LOGIN_PORT_GUARD` | `true` | iptables owner-match 端口守卫（Linux+root）：阻止同机其他账号直连各用户 DSH 的回环端口；不支持的环境下开启会拒绝启动（fail loud）；`NODE_ENV=production` 时关闭同样拒绝启动 |
 | `DSH_SERVER_LOGIN_SECURE_COOKIES` | `false` | HTTPS 部署设为 `true`（cookie 加 `Secure`，SameSite=None 以跨子域共享） |
 | `DSH_SERVER_LOGIN_BASE_DOMAIN` | 空 | 每用户子域名的基域（如 `dsh.example.com`）；空 = 仅子路径访问 |
 | `DSH_SERVER_LOGIN_COOKIE_DOMAIN` | 空 | 会话 cookie 的 `Domain`（如 `.dsh.example.com`，注意前导点）；空 = host-only |

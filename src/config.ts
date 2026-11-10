@@ -157,7 +157,7 @@ const DEFAULT_LOG_LEVEL = 'info'
 const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 const DEFAULT_RESTART_BACKOFF_MS = 1000
-const DEFAULT_ISOLATION_MODE: IsolationMode = 'soft'
+const DEFAULT_ISOLATION_MODE: IsolationMode = 'account'
 function defaultSpawnAsUserCommand(): string[] {
   const binary =
     ['/usr/bin/setpriv', '/bin/setpriv', '/usr/local/bin/setpriv'].find((p) => existsSync(p)) ??
@@ -378,7 +378,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     cookieDomain: overrides.cookieDomain ?? process.env.DSH_SERVER_LOGIN_COOKIE_DOMAIN ?? DEFAULT_COOKIE_DOMAIN,
     enablePatch: overrides.enablePatch ?? toBool(process.env.DSH_SERVER_LOGIN_ENABLE_PATCH, DEFAULT_ENABLE_PATCH),
     identityPublicKey: '',
-    portGuard: overrides.portGuard ?? toBool(process.env.DSH_SERVER_LOGIN_PORT_GUARD, false),
+    portGuard: overrides.portGuard ?? toBool(process.env.DSH_SERVER_LOGIN_PORT_GUARD, true),
     memoryMax: parseLimit('DSH_SERVER_LOGIN_MEMORY_MAX', process.env.DSH_SERVER_LOGIN_MEMORY_MAX, MEMORY_MAX_PATTERN),
     cpuQuota: parseLimit('DSH_SERVER_LOGIN_CPU_QUOTA', process.env.DSH_SERVER_LOGIN_CPU_QUOTA, CPU_QUOTA_PATTERN),
     tasksMax: parsePositiveInt('DSH_SERVER_LOGIN_TASKS_MAX', process.env.DSH_SERVER_LOGIN_TASKS_MAX),
@@ -402,5 +402,31 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     sessionSecret: overrides.sessionSecret ?? requireSessionSecret(process.env.SESSION_SECRET),
     mainAppUrl:
       overrides.mainAppUrl ?? process.env.DSH_SERVER_LOGIN_MAIN_APP_URL ?? DEFAULT_MAIN_APP_URL,
+  }
+}
+
+/**
+ * Refuse a configuration that would run tenants without OS-level separation.
+ *
+ * `soft` isolation runs every tenant DSH under the orchestrator's own uid, and
+ * an unguarded loopback port lets a tenant reach another tenant's process.
+ * Both are only defensible in a development box, so production mode rejects
+ * them at load instead of silently deploying a shared-uid fleet.
+ *
+ * @param config - the resolved configuration.
+ * @throws Error when production is configured with `soft` isolation or without the port guard.
+ */
+export function assertProductionIsolation(config: ServerConfig): void {
+  const production = process.env.NODE_ENV?.trim().toLowerCase() === 'production'
+  if (!production) return
+  if (config.isolationMode !== 'account') {
+    throw new Error(
+      `NODE_ENV=production refuses DSH_SERVER_LOGIN_ISOLATION_MODE=${config.isolationMode}: every tenant would share one uid`,
+    )
+  }
+  if (config.portGuard !== true) {
+    throw new Error(
+      'NODE_ENV=production refuses DSH_SERVER_LOGIN_PORT_GUARD=false: tenants could reach each other\'s loopback ports',
+    )
   }
 }
