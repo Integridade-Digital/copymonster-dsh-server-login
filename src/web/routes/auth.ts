@@ -7,6 +7,7 @@
 import type { FastifyInstance, FastifyPluginAsync, FastifyReply, FastifyRequest } from 'fastify'
 import { randomUUID } from 'node:crypto'
 import { requireAuth } from '../middleware/authn.js'
+import { loginThrottle } from '../middleware/login-throttle.js'
 import { homeRoot, userRoot } from '../../fs/workspace.js'
 import { deriveKey, encrypt } from '../../crypto.js'
 import { toPublicUser, type User } from '../../db/types.js'
@@ -309,12 +310,26 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     { schema: loginSchema, config: { rateLimit: { max: 10, timeWindow: '1 minute' } } },
     async (request, reply) => {
       const { username, password } = request.body as Credentials
+
+      // Per-account throttle: the per-IP limit in the route config cannot stop a
+      // caller that changes address while guessing one password.
+      const throttle = loginThrottle.check(username)
+      if (!throttle.allowed) {
+        reply.header('retry-after', Math.ceil(throttle.retryAfterMs / 1000))
+        return reply.code(429).send({ error: 'too_many_attempts', retryAfterMs: throttle.retryAfterMs })
+      }
+
       const user = await app.db.findUserByUsername(username)
       if (user === undefined || !(await verifyPassword(password, user.pass_hash))) {
+        const { delayMs } = loginThrottle.recordFailure(username)
+        if (delayMs > 0) reply.header('retry-after', Math.ceil(delayMs / 1000))
         return reply.code(401).send({ error: 'invalid_credentials' })
       }
       if (user.role === 'pending') return reply.code(403).send({ error: 'pending_review' })
       if (user.role === 'disabled') return reply.code(403).send({ error: 'disabled' })
+
+      // Authenticated: the account's strikes are spent.
+      loginThrottle.recordSuccess(username)
 
       // Password login carries no Supabase tenant identity; a tenant subdomain
       // requires the SSO exchange, which signs one.
