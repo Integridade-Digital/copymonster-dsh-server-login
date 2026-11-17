@@ -15,6 +15,7 @@ import {
   readdirSync,
   readFileSync,
   realpathSync,
+  rmSync,
   symlinkSync,
   writeFileSync,
 } from 'node:fs'
@@ -61,12 +62,35 @@ function chownRecursiveSync(targetPath: string, uid: number, gid: number): void 
 
 const COPYMONSTER_BUNDLE = '@deepseek-ai/dsh-copymonster'
 const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
-const ZERNIO_BUNDLE = '@deepseek-ai/dsh-experimental-zernio-mcp'
 const MODEL_MASK_BUNDLE = '@deepseek-ai/dsh-host-model-mask'
-/** Profile patch row id the Zernio bundle inserts; the profile layer overrides its origin. */
-const ZERNIO_ROW_ID = 'zernio-mcp'
 /** Profile patch row id the model-mask bundle inserts; tenants only see the virtual CopyMonster model. */
 const MODEL_MASK_ROW_ID = 'model-mask'
+
+/**
+ * One MCP bundle the control plane mounts in every tenant profile.
+ *
+ * Each of these registers a remote MCP endpoint and serves a Web settings card,
+ * so it needs all three of: a `dsh.profile.bundles` entry (the Host mounts the
+ * plugin and therefore announces its client module in `__DSH_BOOT__`), a
+ * resolvable package in the profile's `node_modules`, and a profile patch row
+ * carrying this tenant's own public origin (the plugin's trusted-host fence
+ * would otherwise reject `<username>.<baseDomain>` and register a loopback
+ * callback).
+ */
+interface McpBundle {
+  /** Bundle package name. */
+  readonly bundle: string
+  /** Profile patch row id the bundle inserts and this provisioning overrides. */
+  readonly rowId: string
+}
+
+/** MCP bundles that must be present, in this order, in every tenant profile. */
+const MCP_BUNDLES: readonly McpBundle[] = [
+  { bundle: '@deepseek-ai/dsh-experimental-zernio-mcp', rowId: 'zernio-mcp' },
+  { bundle: '@deepseek-ai/dsh-experimental-sendpulse-mcp', rowId: 'sendpulse-mcp' },
+  { bundle: '@deepseek-ai/dsh-experimental-leadlovers-mcp', rowId: 'leadlovers-mcp' },
+  { bundle: '@deepseek-ai/dsh-experimental-kiwify-mcp', rowId: 'kiwify-mcp' },
+]
 
 /**
  * Append a YAML block to existing patch content, guaranteeing a newline
@@ -226,12 +250,13 @@ function restrictToOwner(targetPath: string): void {
 
 /**
  * Ensure one bundle appears in a profile's `dsh.profile.bundles`, inserted
- * directly after the Web app layer so it applies after `dsh-base` and
+ * directly after the given anchor layer so it applies after `dsh-base` and
  * `dsh-web-app` but before the profile's own `cordis.patch.yml`.
  * @param packageJsonPath - the profile's `package.json`.
  * @param bundle - bare bundle package name.
+ * @param after - bundle to insert after; appended to the list when absent.
  */
-function ensureBundle(packageJsonPath: string, bundle: string): void {
+function ensureBundle(packageJsonPath: string, bundle: string, after: string = WEB_APP_BUNDLE): void {
   try {
     if (!existsSync(packageJsonPath)) return
     const raw = readFileSync(packageJsonPath, 'utf8')
@@ -240,7 +265,7 @@ function ensureBundle(packageJsonPath: string, bundle: string): void {
     if (profile === undefined || !Array.isArray(profile.bundles)) return
     if (profile.bundles.includes(bundle)) return
     const bundles = [...profile.bundles]
-    const anchorIdx = bundles.indexOf(WEB_APP_BUNDLE)
+    const anchorIdx = bundles.indexOf(after)
     if (anchorIdx === -1) {
       bundles.push(bundle)
     } else {
@@ -254,55 +279,55 @@ function ensureBundle(packageJsonPath: string, bundle: string): void {
 }
 
 /**
- * Ensure the profile patch carries the Zernio row with this deployment's own
- * public origin. The bundle's own patch inserts the row without an origin, so
- * a tenant reaching its DSH through `<username>.<baseDomain>` would otherwise
- * fail the plugin's trusted-host fence and register a loopback callback.
+ * Ensure the profile patch carries one MCP bundle's row with this deployment's
+ * own public origin. The bundle's own patch inserts the row without an origin.
+ *
+ * The row is matched by its id inside a `- insert:` block (the form the bundle
+ * layer itself produces) as well as at the document root, so a profile whose
+ * patch was written either way is updated instead of duplicated.
  * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ * @param rowId - profile patch row id the bundle's own patch inserts.
+ * @param bundle - bundle package name the row mounts.
  * @param publicOrigin - browser-facing origin of this tenant.
  */
-function ensureZernioEntry(cordisPatchPath: string, publicOrigin: string): void {
+function ensureMcpEntry(cordisPatchPath: string, rowId: string, bundle: string, publicOrigin: string): void {
   try {
     if (!existsSync(cordisPatchPath)) return
     const raw = readFileSync(cordisPatchPath, 'utf8')
     const lines = raw.split('\n')
-    const idIdx = lines.findIndex(line => line.trim() === `- id: ${ZERNIO_ROW_ID}`)
+    const idIdx = lines.findIndex(line => line.trim() === `- id: ${rowId}`)
     if (idIdx === -1) {
-      const block = [
-        `- id: ${ZERNIO_ROW_ID}`,
-        `  name: "${ZERNIO_BUNDLE}"`,
-        '  config:',
-        `    publicOrigin: ${publicOrigin}`,
-        '',
-      ].join('\n')
+      const block = [`- id: ${rowId}`, `  name: "${bundle}"`, '  config:', `    publicOrigin: ${publicOrigin}`].join('\n')
       writeFileSync(cordisPatchPath, appendYamlBlock(raw, block))
       return
     }
+    // A row under an `insert:` list starts its `- id:` marker two spaces left of
+    // its keys, so the keys' indentation is read from the row's own `name:`.
+    const siblingLine = lines.slice(idIdx + 1).find(line => line.trimStart().startsWith('name:'))
+    const markerIndent = /^\s*/.exec(lines[idIdx])?.[0] ?? ''
+    const keyIndent = siblingLine === undefined ? `${markerIndent}  ` : (/^\s*/.exec(siblingLine)?.[0] ?? '')
     let end = lines.length
     for (let i = idIdx + 1; i < lines.length; i += 1) {
-      if (lines[i].startsWith('- ')) {
+      if (lines[i].trimStart().startsWith('- ')) {
         end = i
         break
       }
     }
     const originIdx = lines.findIndex((line, i) => i > idIdx && i < end && line.trimStart().startsWith('publicOrigin:'))
+    const configIdx = lines.findIndex((line, i) => i > idIdx && i < end && line.trim() === 'config:')
     if (originIdx !== -1) {
-      lines[originIdx] = `    publicOrigin: ${publicOrigin}`
+      lines[originIdx] = `${configIdx === -1 ? keyIndent : `${keyIndent}  `}publicOrigin: ${publicOrigin}`
+    } else if (configIdx !== -1) {
+      lines.splice(configIdx + 1, 0, `${keyIndent}  publicOrigin: ${publicOrigin}`)
     } else {
-      const configIdx = lines.findIndex((line, i) => i > idIdx && i < end && line.trim() === 'config:')
-      if (configIdx !== -1) {
-        lines.splice(configIdx + 1, 0, `    publicOrigin: ${publicOrigin}`)
-      } else {
-        lines.splice(end, 0, '  config:', `    publicOrigin: ${publicOrigin}`)
-      }
+      lines.splice(end, 0, `${keyIndent}config:`, `${keyIndent}  publicOrigin: ${publicOrigin}`)
     }
     const updated = lines.join('\n')
     writeFileSync(cordisPatchPath, updated.endsWith('\n') ? updated : `${updated}\n`)
   } catch (error) {
-    warnProvisioning('ensure Zernio profile entry', cordisPatchPath, error)
+    warnProvisioning(`ensure ${rowId} profile entry`, cordisPatchPath, error)
   }
 }
-
 /**
  * Ensure the tenant's `cordis.patch.yml` mounts the model-mask bundle with the
  * virtual CopyMonster model only. Idempotent: a no-op when the row already
@@ -349,21 +374,33 @@ function ensureModelMaskEntry(cordisPatchPath: string): void {
 }
 
 /**
- * Make the Zernio package resolvable from a profile whose `node_modules` is a
- * real directory (older tenants copied before the template gained the package).
+ * Make one bundle's package resolvable from a profile whose `node_modules` is
+ * a real directory: a tenant copied before the template gained the package, or
+ * a fresh copy sharing the template tree that never had the scope link.
+ *
+ * The target is the template's own entry when it has one, so the tenant keeps
+ * resolving whatever tree the template was installed from. Without the link the
+ * Host cannot import the plugin, so the bundle drops out of the roster and its
+ * Web card never boots.
  * @param userModules - the profile's `node_modules`.
  * @param templateModules - the template profile's `node_modules`, when present.
+ * @param bundle - bundle package name to link.
  */
-function linkZernioPackage(userModules: string, templateModules: string | undefined): void {
-  const link = join(userModules, '@deepseek-ai', 'dsh-experimental-zernio-mcp')
-  if (existsSync(link) || templateModules === undefined) return
-  const target = join(templateModules, '@deepseek-ai', 'dsh-experimental-zernio-mcp')
-  if (!existsSync(target)) return
+function linkBundlePackage(userModules: string, templateModules: string | undefined, bundle: string): void {
+  // `bundle` already carries its scope, so it is one path segment under
+  // `node_modules`; the template entry is the same segment under the template.
+  const link = join(userModules, bundle)
+  if (existsSync(link)) return
+  const candidate = templateModules === undefined ? undefined : join(templateModules, bundle)
+  if (candidate === undefined || !existsSync(candidate)) {
+    warnProvisioning(`resolve ${bundle} package`, candidate ?? link, new Error('not present in the template profile'))
+    return
+  }
   try {
     ensureDir(join(userModules, '@deepseek-ai'))
-    symlinkSync(realpathSync(target), link, 'dir')
+    symlinkSync(realpathSync(candidate), link, 'dir')
   } catch (error) {
-    warnProvisioning('link Zernio package', link, error)
+    warnProvisioning(`link ${bundle} package`, link, error)
   }
 }
 
@@ -374,8 +411,8 @@ export class LocalUserFs implements UserFs {
    * Provision a tenant root and keep its web profile aligned with the template.
    * @param userId - tenant user id.
    * @param uid - tenant Linux uid, when the control plane assigns one.
-   * @param publicOrigin - browser-facing origin of this tenant; when set, the
-   *   profile patch pins the Zernio plugin to it.
+   * @param publicOrigin - browser-facing origin of this tenant; when set, every
+   *   MCP bundle's profile row pins it.
    */
   async initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void> {
     const root = this.rootFor(userId)
@@ -396,12 +433,17 @@ export class LocalUserFs implements UserFs {
     }
 
     // Provision the resident web profile so the per-user DSH can boot without
-    // missing node_modules. Check known template profile locations.
-    const candidateTemplates = [
-      '/root/.dsh/profiles/web',
-      '/var/lib/copymonster-dsh/profiles/web',
-      join(homedir(), '.dsh', 'profiles', 'web'),
-    ]
+    // missing node_modules. Check known template profile locations, and let a
+    // deployment pin the one it installs so a stray home directory on the
+    // control-plane host never shadows it.
+    const configuredTemplate = process.env.DSH_SERVER_LOGIN_TEMPLATE_PROFILE
+    const candidateTemplates = configuredTemplate !== undefined && configuredTemplate !== ''
+      ? [configuredTemplate]
+      : [
+          '/root/.dsh/profiles/web',
+          '/var/lib/copymonster-dsh/profiles/web',
+          join(homedir(), '.dsh', 'profiles', 'web'),
+        ]
     const templateProfile = candidateTemplates.find((p) => existsSync(p))
     const userProfile = join(homeRoot(root), 'profiles', 'web')
 
@@ -431,7 +473,13 @@ export class LocalUserFs implements UserFs {
     // profile's own links resolve against the template tree, and every tenant
     // reads the same modules without a per-tenant install.
     const templateModules = templateProfile === undefined ? undefined : join(templateProfile, 'node_modules')
-    const userModules = join(userProfile, 'node_modules')
+    let userModules = join(userProfile, 'node_modules')
+    // A tenant copied without the template's `node_modules` keeps its own empty
+    // directory, and the share below would then skip it, leaving every profile
+    // dependency — the MCP bundles included — unresolvable.
+    if (existsSync(userModules) && readdirSync(userModules).length === 0) {
+      rmSync(userModules, { recursive: true, force: true })
+    }
     if (templateModules !== undefined && existsSync(templateModules) && !existsSync(userModules)) {
       try {
         symlinkSync(realpathSync(templateModules), userModules, 'dir')
@@ -439,6 +487,9 @@ export class LocalUserFs implements UserFs {
         warnProvisioning('share template node_modules', userModules, error)
       }
     }
+    // `linkBundlePackage` links into `<profile>/node_modules`, so keep that
+    // exact path even when the scope directory had to be created per tenant.
+    userModules = join(userProfile, 'node_modules')
 
     // The supervisor patch mounts `dsh-server-login/runtime` in every child, and
     // Node resolves it by walking up from `<home>/profiles/<profile>/`.
@@ -448,13 +499,19 @@ export class LocalUserFs implements UserFs {
     const userPackageJson = join(userProfile, 'package.json')
     ensureBundle(userPackageJson, COPYMONSTER_BUNDLE)
 
-    // Existing profiles were copied before later template additions, so the
-    // Zernio plugin and its per-tenant origin are backfilled on every launch
-    // rather than only at first provisioning.
-    if (publicOrigin !== undefined) {
-      ensureBundle(userPackageJson, ZERNIO_BUNDLE)
-      linkZernioPackage(userModules, templateModules)
-      ensureZernioEntry(join(userProfile, 'cordis.patch.yml'), publicOrigin)
+    // Existing profiles were copied before later template additions, so every
+    // MCP bundle is backfilled on each launch rather than only at first
+    // provisioning: an absent bundle leaves its plugin out of the Host loader,
+    // which keeps its client module out of `__DSH_BOOT__` and drops its settings
+    // card from the tenant's Web app.
+    let anchor = WEB_APP_BUNDLE
+    for (const { bundle, rowId } of MCP_BUNDLES) {
+      ensureBundle(userPackageJson, bundle, anchor)
+      linkBundlePackage(userModules, templateModules, bundle)
+      if (publicOrigin !== undefined) {
+        ensureMcpEntry(join(userProfile, 'cordis.patch.yml'), rowId, bundle, publicOrigin)
+      }
+      anchor = bundle
     }
 
     // Inject the model-mask row into the tenant's cordis.patch.yml so tenants
