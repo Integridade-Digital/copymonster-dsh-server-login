@@ -65,6 +65,12 @@ const WEB_APP_BUNDLE = '@deepseek-ai/dsh-web-app'
 const MODEL_MASK_BUNDLE = '@deepseek-ai/dsh-host-model-mask'
 /** Profile patch row id the model-mask bundle inserts; tenants only see the virtual CopyMonster model. */
 const MODEL_MASK_ROW_ID = 'model-mask'
+/** Profile patch row id that owns the tenant's default model selection. */
+const AGENT_DEFAULT_MODEL_ROW_ID = 'agent-default-model'
+/** Virtual provider route every tenant selects; the mask resolves it to the platform route. */
+const TENANT_MODEL_PROVIDER = 'copymonster'
+/** Virtual model id every tenant selects; the mask resolves it to the platform route. */
+const TENANT_MODEL_ID = 'copy-monster-default'
 
 /**
  * One MCP bundle the control plane mounts in every tenant profile.
@@ -114,20 +120,136 @@ const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
  */
 const DEFAULT_GLOBAL_CREDENTIALS = '/root/.dsh/.credentials.yaml'
 
+/** One route the model-mask resolves the virtual alias to. */
+interface TenantModelRoute {
+  readonly provider: string
+  readonly model: string
+}
+
+/** Platform routing the tenant profile's model-mask row carries. */
+interface TenantRoutingPolicy {
+  readonly primary: TenantModelRoute
+  readonly fallback: TenantModelRoute
+  readonly failoverEnabled: boolean
+  readonly maxAttempts: number
+  readonly timeoutMs: number
+}
+
+/** Environment defaults, used only while the operator profile carries no policy. */
+const DEFAULT_PRIMARY_ROUTE: TenantModelRoute = { provider: 'openrouter', model: 'deepseek/deepseek-chat' }
+const DEFAULT_FALLBACK_ROUTE: TenantModelRoute = { provider: 'openrouter', model: 'openrouter/free' }
+
+/** Narrow one decoded YAML value to a plain object. */
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** Read one non-empty string member, or undefined. */
+function stringMember(node: unknown, key: string): string | undefined {
+  if (!isRecord(node)) return undefined
+  const value = node[key]
+  return typeof value === 'string' && value !== '' ? value : undefined
+}
+
+/** Read one boolean member, or undefined. */
+function booleanMember(node: unknown, key: string): boolean | undefined {
+  if (!isRecord(node)) return undefined
+  const value = node[key]
+  return typeof value === 'boolean' ? value : undefined
+}
+
+/** Read one positive integer member, or undefined. */
+function countMember(node: unknown, key: string): number | undefined {
+  if (!isRecord(node)) return undefined
+  const value = node[key]
+  return typeof value === 'number' && Number.isInteger(value) && value > 0 ? value : undefined
+}
+
+/** Flatten a patch document's root rows and its `- insert:` groups. */
+function patchRows(document: unknown): Record<string, unknown>[] {
+  if (!Array.isArray(document)) return []
+  const rows: Record<string, unknown>[] = []
+  for (const row of document) {
+    if (!isRecord(row)) continue
+    if (Array.isArray(row.insert)) {
+      for (const nested of row.insert) if (isRecord(nested)) rows.push(nested)
+      continue
+    }
+    rows.push(row)
+  }
+  return rows
+}
+
 /**
- * Minimal tenant `settings.yaml`: only the virtual CopyMonster model is
- * advertised. The real provider/model resolve privately via the model-mask
- * plugin, so the tenant never sees the underlying route.
+ * Platform routing policy the tenant profile must carry.
+ *
+ * The operator configures it once in Settings → Models, which stores the
+ * `model-mask` row of the template profile. Tenants copy that policy on every
+ * launch: the platform credential pays for the route, so it must not be left to
+ * whatever a tenant profile was copied with. Environment values stand in until
+ * the operator configures a policy.
+ * @param templateProfile - the operator profile tenants are provisioned from, when present.
+ * @returns the primary and fallback routes with the failover policy.
  */
-const VIRTUAL_SETTINGS_YAML = `llm:
-  providers:
-    - id: copymonster
-      name: Model CopyMonster
-      models:
-        - id: copy-monster-default
-          name: Model CopyMonster
-  default: copy-monster-default
-`
+function tenantRoutingPolicy(templateProfile?: string): TenantRoutingPolicy {
+  const policy: TenantRoutingPolicy = {
+    primary: {
+      provider: process.env.DSH_SERVER_LOGIN_LLM_PRIMARY_PROVIDER ?? DEFAULT_PRIMARY_ROUTE.provider,
+      model: process.env.DSH_SERVER_LOGIN_LLM_PRIMARY_MODEL ?? DEFAULT_PRIMARY_ROUTE.model,
+    },
+    fallback: {
+      provider: process.env.DSH_SERVER_LOGIN_LLM_FALLBACK_PROVIDER ?? DEFAULT_FALLBACK_ROUTE.provider,
+      model: process.env.DSH_SERVER_LOGIN_LLM_FALLBACK_MODEL ?? DEFAULT_FALLBACK_ROUTE.model,
+    },
+    failoverEnabled: true,
+    maxAttempts: 2,
+    timeoutMs: 30000,
+  }
+  if (templateProfile === undefined) return policy
+  const patchPath = join(templateProfile, 'cordis.patch.yml')
+  if (!existsSync(patchPath)) return policy
+  try {
+    const row = patchRows(loadYaml(readFileSync(patchPath, 'utf8')))
+      .find(candidate => candidate.id === MODEL_MASK_ROW_ID)
+    const config = row?.config
+    const failover = isRecord(config) ? config.fallbackPolicy : undefined
+    return {
+      primary: {
+        provider: stringMember(config, 'primaryProvider') ?? policy.primary.provider,
+        model: stringMember(config, 'primaryModel') ?? policy.primary.model,
+      },
+      fallback: {
+        provider: stringMember(config, 'fallbackProvider') ?? policy.fallback.provider,
+        model: stringMember(config, 'fallbackModel') ?? policy.fallback.model,
+      },
+      failoverEnabled: booleanMember(failover, 'enabled') ?? policy.failoverEnabled,
+      maxAttempts: countMember(failover, 'maxAttempts') ?? policy.maxAttempts,
+      timeoutMs: countMember(failover, 'timeoutMs') ?? policy.timeoutMs,
+    }
+  } catch (error) {
+    warnProvisioning(`read ${MODEL_MASK_ROW_ID} routing policy`, patchPath, error)
+    return policy
+  }
+}
+
+/**
+ * Tenant `settings.yaml` handed to the harness profile on boot.
+ *
+ * The harness imports this legacy document into the profile patch and renames
+ * it, so writing it before every launch keeps the tenant's default selection at
+ * the virtual alias even when the source profile carried the operator's own
+ * provider. Only the selection is declared here; the real provider routes live
+ * in the profile patch and stay out of the tenant-visible document.
+ */
+function tenantSettingsYaml(): string {
+  return [
+    `${AGENT_DEFAULT_MODEL_ROW_ID}:`,
+    `  provider: ${TENANT_MODEL_PROVIDER}`,
+    `  model: ${TENANT_MODEL_ID}`,
+    '',
+  ].join('\n')
+}
+
 
 /** Shape of a harness credential store, as far as provisioning reads it. */
 interface CredentialStore {
@@ -329,53 +451,166 @@ function ensureMcpEntry(cordisPatchPath: string, rowId: string, bundle: string, 
   }
 }
 /**
- * Ensure the tenant's `cordis.patch.yml` mounts the model-mask bundle with the
- * virtual CopyMonster model only. Idempotent: a no-op when the row already
- * exists; updates the config block if the row is present but stale.
+ * Replace one patch row with a freshly rendered block, or append the row when
+ * the profile has none. Idempotent: re-running with the same block rewrites the
+ * same bytes.
  * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ * @param rowId - profile patch row id to replace.
+ * @param block - complete row lines, without a trailing newline element.
  */
-function ensureModelMaskEntry(cordisPatchPath: string): void {
+function writePatchRow(cordisPatchPath: string, rowId: string, block: readonly string[]): void {
+  const raw = readFileSync(cordisPatchPath, 'utf8')
+  const lines = raw.split('\n')
+  const text = block.join('\n')
+  const idIdx = lines.findIndex(line => line.trim() === `- id: ${rowId}`)
+  if (idIdx === -1) {
+    writeFileSync(cordisPatchPath, appendYamlBlock(raw, text))
+    return
+  }
+  let end = lines.length
+  for (let i = idIdx + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith('- ')) {
+      end = i
+      break
+    }
+  }
+  const prefix = lines.slice(0, idIdx).join('\n')
+  const suffix = lines.slice(end).join('\n')
+  writeFileSync(cordisPatchPath, `${appendYamlBlock(prefix, text)}${suffix}`)
+}
+
+/** Provider route whose profile the tenant's `llm-pi-ai` row owns. */
+const LLM_PI_AI_ROW_ID = 'llm-pi-ai'
+
+/** Escape one literal for use inside a regular expression. */
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * Ensure one provider route in the tenant profile advertises a model id.
+ *
+ * A route that declares a `models` list serves exactly that list, so a platform
+ * model the operator's own profile never listed is refused as `UNKNOWN_MODEL`
+ * even though the route's credential and endpoint are configured. The model is
+ * inserted as text lines beside the existing entries to keep the operator's
+ * comments and formatting, unlike a full YAML round trip.
+ * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ * @param provider - provider route that must advertise the model.
+ * @param modelId - model id the platform route resolves to.
+ * @returns whether a model entry was added; false when the route already
+ *   advertises the id, omits a `models` list (serving the installed catalog),
+ *   or is absent from the profile.
+ */
+function ensureProviderModel(cordisPatchPath: string, provider: string, modelId: string): boolean {
+  const raw = readFileSync(cordisPatchPath, 'utf8')
+  const lines = raw.split('\n')
+  const rowIdx = lines.findIndex(line => line.trim() === `- id: ${LLM_PI_AI_ROW_ID}`)
+  if (rowIdx === -1) return false
+  let rowEnd = lines.length
+  for (let i = rowIdx + 1; i < lines.length; i += 1) {
+    if (lines[i].startsWith('- ')) {
+      rowEnd = i
+      break
+    }
+  }
+
+  const providerPattern = new RegExp(`^(\\s+)${escapeRegExp(provider)}:\\s*$`)
+  let providerIdx = -1
+  let providerIndent = ''
+  for (let i = rowIdx + 1; i < rowEnd; i += 1) {
+    const match = providerPattern.exec(lines[i])
+    if (match === null) continue
+    providerIdx = i
+    providerIndent = match[1]
+    break
+  }
+  if (providerIdx === -1) return false
+
+  // The provider block ends at the next line indented no deeper than its own key.
+  let blockEnd = rowEnd
+  for (let i = providerIdx + 1; i < rowEnd; i += 1) {
+    if (lines[i].trim() === '') continue
+    const indent = /^\s*/.exec(lines[i])?.[0] ?? ''
+    if (indent.length <= providerIndent.length) {
+      blockEnd = i
+      break
+    }
+  }
+
+  const modelsIdx = lines.findIndex((line, i) => i > providerIdx && i < blockEnd && line.trim() === 'models:')
+  // No list means the route serves the installed catalog, which may already
+  // describe the model; only an explicit list can omit it.
+  if (modelsIdx === -1) return false
+  const entryIndent = `${/^\s*/.exec(lines[modelsIdx])?.[0] ?? ''}  `
+  const listed = lines.slice(modelsIdx + 1, blockEnd).some((line) => {
+    const match = /^\s*-\s*id:\s*(.+?)\s*$/.exec(line)
+    return match !== null && match[1].replace(/^(['"])(.*)\1$/, '$2') === modelId
+  })
+  if (listed) return false
+
+  lines.splice(modelsIdx + 1, 0, `${entryIndent}- id: ${JSON.stringify(modelId)}`, `${entryIndent}  name: ${JSON.stringify(modelId)}`)
+  writeFileSync(cordisPatchPath, lines.join('\n'))
+  return true
+}
+
+/**
+ * Ensure the tenant's `cordis.patch.yml` mounts the model-mask bundle with the
+ * virtual CopyMonster model and the platform routing policy. Idempotent: an
+ * existing row is rewritten, a missing row is appended.
+ * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ * @param policy - platform routing the tenant must resolve the alias to.
+ */
+function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPolicy): void {
   try {
     if (!existsSync(cordisPatchPath)) return
-    const raw = readFileSync(cordisPatchPath, 'utf8')
-    const lines = raw.split('\n')
-    const idIdx = lines.findIndex(line => line.trim() === `- id: ${MODEL_MASK_ROW_ID}`)
-    const block = [
+    // The mask resolves the alias to these routes at dispatch time, so the
+    // profile must advertise both or the tenant turn fails as UNKNOWN_MODEL.
+    ensureProviderModel(cordisPatchPath, policy.primary.provider, policy.primary.model)
+    ensureProviderModel(cordisPatchPath, policy.fallback.provider, policy.fallback.model)
+    writePatchRow(cordisPatchPath, MODEL_MASK_ROW_ID, [
       `- id: ${MODEL_MASK_ROW_ID}`,
       `  name: "${MODEL_MASK_BUNDLE}"`,
       '  config:',
-      `    virtualProvider: copymonster`,
-      `    virtualModel: copy-monster-default`,
-      `    virtualModelName: Model CopyMonster`,
-      `    primaryProvider: deepseek-official`,
-      `    primaryModel: deepseek-chat`,
-      `    fallbackProvider: openrouter`,
-      `    fallbackModel: openrouter/free`,
+      `    virtualProvider: ${TENANT_MODEL_PROVIDER}`,
+      `    virtualModel: ${TENANT_MODEL_ID}`,
+      '    virtualModelName: Model CopyMonster',
+      `    primaryProvider: ${policy.primary.provider}`,
+      `    primaryModel: ${policy.primary.model}`,
+      `    fallbackProvider: ${policy.fallback.provider}`,
+      `    fallbackModel: ${policy.fallback.model}`,
       `    fallbackPolicy:`,
-      `      enabled: true`,
-      `      maxAttempts: 2`,
-      `      timeoutMs: 30000`,
+      `      enabled: ${policy.failoverEnabled}`,
+      `      maxAttempts: ${policy.maxAttempts}`,
+      `      timeoutMs: ${policy.timeoutMs}`,
       `    applyToTenantsOnly: true`,
-      '',
-    ].join('\n')
-    if (idIdx === -1) {
-      // Append the model-mask row at the end of the file.
-      writeFileSync(cordisPatchPath, appendYamlBlock(raw, block))
-      return
-    }
-    // Row exists: replace its config block up to the next `- id:` row.
-    let end = lines.length
-    for (let i = idIdx + 1; i < lines.length; i += 1) {
-      if (lines[i].startsWith('- ')) {
-        end = i
-        break
-      }
-    }
-    const prefix = lines.slice(0, idIdx).join('\n')
-    const suffix = lines.slice(end).join('\n')
-    writeFileSync(cordisPatchPath, `${appendYamlBlock(prefix, block)}${suffix}`)
+    ])
   } catch (error) {
     warnProvisioning('ensure model-mask profile entry', cordisPatchPath, error)
+  }
+}
+
+/**
+ * Ensure the tenant's default model selection is the virtual CopyMonster alias.
+ *
+ * A profile copied from the operator's own profile keeps that operator's
+ * provider selection, and a stale selection keeps every tenant turn on a route
+ * the tenant cannot pay for. Rewriting the row on every launch makes the
+ * platform route authoritative regardless of when the profile was provisioned.
+ * @param cordisPatchPath - the profile's `cordis.patch.yml`.
+ */
+function ensureAgentDefaultModel(cordisPatchPath: string): void {
+  try {
+    if (!existsSync(cordisPatchPath)) return
+    writePatchRow(cordisPatchPath, AGENT_DEFAULT_MODEL_ROW_ID, [
+      `- id: ${AGENT_DEFAULT_MODEL_ROW_ID}`,
+      `  name: "@deepseek-ai/dsh-agent-default-model"`,
+      '  config:',
+      `    provider: ${TENANT_MODEL_PROVIDER}`,
+      `    model: ${TENANT_MODEL_ID}`,
+    ])
+  } catch (error) {
+    warnProvisioning('ensure agent-default-model profile entry', cordisPatchPath, error)
   }
 }
 
@@ -459,19 +694,23 @@ export class LocalUserFs implements UserFs {
         filter: (src) => {
           const base = join(templateProfile, 'node_modules')
           const settingsYaml = join(templateProfile, 'settings.yaml')
-          // Never copy the Admin's raw settings.yaml — it exposes real provider
-          // model names to the tenant. A virtual-model settings.yaml is written
-          // below instead.
+          // Never copy the Admin's raw settings.yaml — it names the operator's
+          // own provider and selection. The tenant document is written below.
           return src !== base && src !== settingsYaml
         },
       })
-      // Write the tenant-only settings.yaml: only the virtual CopyMonster model
-      // is advertised. Real providers resolve privately via model-mask.
-      const tenantSettingsYaml = join(userProfile, 'settings.yaml')
+    }
+
+    // Write the tenant document on every launch, not only at first provisioning:
+    // a profile copied before this rule kept the operator's selection, and the
+    // harness imports this document over the profile on boot. Only the virtual
+    // alias is declared, so the real route never reaches the tenant.
+    const tenantSettingsYamlPath = join(userProfile, 'settings.yaml')
+    if (existsSync(userProfile)) {
       try {
-        writeFileSync(tenantSettingsYaml, VIRTUAL_SETTINGS_YAML, { mode: 0o644 })
+        writeFileSync(tenantSettingsYamlPath, tenantSettingsYaml(), { mode: 0o644 })
       } catch (error) {
-        warnProvisioning('write virtual settings.yaml', tenantSettingsYaml, error)
+        warnProvisioning('write virtual settings.yaml', tenantSettingsYamlPath, error)
       }
     }
 
@@ -521,9 +760,12 @@ export class LocalUserFs implements UserFs {
     }
 
     // Inject the model-mask row into the tenant's cordis.patch.yml so tenants
-    // only see the virtual `copy-monster-default` / "Model CopyMonster" model.
-    // Idempotent: a no-op when the row already exists.
-    ensureModelMaskEntry(join(userProfile, 'cordis.patch.yml'))
+    // only see the virtual `copy-monster-default` / "Model CopyMonster" model,
+    // carrying the platform routing the operator configured in Settings, and pin
+    // the default selection to that alias on every launch.
+    const cordisPatchPath = join(userProfile, 'cordis.patch.yml')
+    ensureModelMaskEntry(cordisPatchPath, tenantRoutingPolicy(templateProfile))
+    ensureAgentDefaultModel(cordisPatchPath)
 
     // The operator configures the provider once; every tenant consumes it.
     seedGlobalCredentials(homeRoot(root))
