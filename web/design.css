@@ -55,7 +55,7 @@ body.auth-bg,
   margin-bottom: 8px;
 }
 .auth-brand .auth-logo {
-  max-width: 180px;
+  max-width: 220px;
   width: 100%;
   height: auto;
   display: block;
@@ -74,12 +74,13 @@ body.auth-bg,
   font-size: 14px;
   border: 1px solid var(--line);
   border-radius: 10px;
-  background: var(--surface-2);
-  color: var(--ink);
+  background: #ffffff;
+  color: #181611;
   outline: none;
   transition: border-color .15s, box-shadow .15s;
 }
-.field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(150, 125, 69, 0.15); background: #fff; }
+.field input:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(150, 125, 69, 0.15); background: #ffffff; }
+.field input::placeholder { color: #949287; }
 .btn {
   display: inline-flex; align-items: center; justify-content: center; gap: 8px;
   border: 0; cursor: pointer; font-size: 14px; font-weight: 600;
