@@ -1,17 +1,12 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { renderPatch, resolveDefaultRoutingPolicy } from '../lib/supervisor/patch.js'
+import { renderPatch } from '../lib/supervisor/patch.js'
 import { platformApiKeys } from '../lib/supervisor/platform-key.js'
 
-test('renderPatch generates central patch with runtime, model-mask and agent-default-model', () => {
+test('renderPatch generates central patch with runtime and agent-default-model', () => {
   const patch = renderPatch(['extra-plugin'])
 
   assert.ok(patch.includes('id: dsh-server-login-runtime'))
-  assert.ok(patch.includes('id: model-mask'))
-  assert.ok(patch.includes('name: "@deepseek-ai/dsh-host-model-mask"'))
-  assert.ok(patch.includes('virtualProvider: copymonster'))
-  assert.ok(patch.includes('virtualModel: copy-monster-default'))
-  assert.ok(patch.includes('virtualModelName: Model CopyMonster'))
   assert.ok(patch.includes('id: agent-default-model'))
   assert.ok(patch.includes('name: "@deepseek-ai/dsh-agent-default-model"'))
   assert.ok(patch.includes('provider: copymonster'))
@@ -19,25 +14,25 @@ test('renderPatch generates central patch with runtime, model-mask and agent-def
   assert.ok(patch.includes('id: extra-plugin'))
 })
 
-test('renderPatch accepts custom routing policy', () => {
-  const patch = renderPatch([], {
-    routingPolicy: {
-      primaryProvider: 'deepseek-official',
-      primaryModel: 'deepseek-chat',
-      fallbackProvider: 'openrouter',
-      fallbackModel: 'deepseek/deepseek-chat',
-      failoverEnabled: true,
-      maxAttempts: 3,
-      timeoutMs: 45000,
-    },
-  })
+test('renderPatch omits the model-mask row so the profile patch owns it', () => {
+  const patch = renderPatch(['extra-plugin'])
 
-  assert.ok(patch.includes('primaryProvider: deepseek-official'))
-  assert.ok(patch.includes('primaryModel: deepseek-chat'))
-  assert.ok(patch.includes('fallbackProvider: openrouter'))
-  assert.ok(patch.includes('fallbackModel: deepseek/deepseek-chat'))
-  assert.ok(patch.includes('maxAttempts: 3'))
-  assert.ok(patch.includes('timeoutMs: 45000'))
+  // The overlay outranks the profile patch, so a model-mask row here makes DSH
+  // refuse every Settings > Models write as "overridden by a home patch".
+  assert.ok(!patch.includes('id: model-mask'))
+  assert.ok(!patch.includes('@deepseek-ai/dsh-host-model-mask'))
+  assert.ok(!patch.includes('primaryProvider'))
+  assert.ok(!patch.includes('applyToTenantsOnly'))
+  assert.ok(patch.includes('id: extra-plugin'), 'the enabled plugin is still injected')
+})
+
+test('renderPatch accepts an options object', () => {
+  const patch = renderPatch({ enabledPlugins: ['extra-plugin'] })
+
+  assert.ok(patch.includes('id: dsh-server-login-runtime'))
+  assert.ok(patch.includes('id: agent-default-model'))
+  assert.ok(patch.includes('id: extra-plugin'))
+  assert.ok(!patch.includes('id: model-mask'))
 })
 
 test('platformApiKeys collects all set keys and trims whitespace', () => {
