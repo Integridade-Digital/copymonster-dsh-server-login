@@ -27,7 +27,7 @@ export interface RenderPatchOptions {
 /** The runtime plugin patch row, mounted in every child DSH. */
 const RUNTIME_ROW = '    - id: dsh-server-login-runtime\n      name: dsh-server-login/runtime'
 
-const MODEL_MASK_BUNDLE = '@changfenhuang/dsh-host-model-mask'
+const MODEL_MASK_BUNDLE = '@deepseek-ai/dsh-host-model-mask'
 const AGENT_DEFAULT_MODEL_BUNDLE = '@deepseek-ai/dsh-agent-default-model'
 const TENANT_MODEL_PROVIDER = 'copymonster'
 const TENANT_MODEL_ID = 'copy-monster-default'

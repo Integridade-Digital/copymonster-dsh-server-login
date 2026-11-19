@@ -8,7 +8,7 @@ test('renderPatch generates central patch with runtime, model-mask and agent-def
 
   assert.ok(patch.includes('id: dsh-server-login-runtime'))
   assert.ok(patch.includes('id: model-mask'))
-  assert.ok(patch.includes('name: "@changfenhuang/dsh-host-model-mask"'))
+  assert.ok(patch.includes('name: "@deepseek-ai/dsh-host-model-mask"'))
   assert.ok(patch.includes('virtualProvider: copymonster'))
   assert.ok(patch.includes('virtualModel: copy-monster-default'))
   assert.ok(patch.includes('virtualModelName: Model CopyMonster'))
