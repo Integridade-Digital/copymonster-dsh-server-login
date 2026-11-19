@@ -28,6 +28,7 @@ import {
 } from '../fs/workspace.js'
 import { createPortGuard, type PortGuard } from './firewall.js'
 import { findFreePort, scrubEnv, sanitizePath, resolveBinary } from './spawn.js'
+import { platformApiKeys } from './platform-key.js'
 import {
   AlreadyRunningError,
   ProvisioningConflict,
@@ -450,6 +451,7 @@ export class LocalSpawner implements Spawner {
         : { DSH_IDENTITY_PUBLIC_KEY: this.config.identityPublicKey }),
       // Each user's own key; omit entirely when unset so the harness reports
       // "no key" instead of a header-hostile value.
+      ...platformApiKeys(process.env),
       ...(apiKey !== null ? { DEEPSEEK_API_KEY: apiKey } : {}),
     }
   }
