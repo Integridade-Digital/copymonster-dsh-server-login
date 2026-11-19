@@ -16,6 +16,7 @@ import { createUserFs } from '../fs/provider.js'
 import type { UserFs } from '../fs/user-fs.js'
 import { hashUid } from '../isolation.js'
 import { LocalSpawner } from '../supervisor/orchestrator.js'
+import { platformApiKey } from '../supervisor/platform-key.js'
 import { K8sSpawner } from '../supervisor/k8s-spawner.js'
 import { createIdentitySigner, type IdentitySigner } from '../identity.js'
 import { registerDshProxy } from '../supervisor/proxy.js'
@@ -96,11 +97,9 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   const identity = createIdentitySigner(config.dataRoot)
   config.identityPublicKey = identity.publicKey
   const db = await createDbAdapter(config)
-  // Tenants consume the platform's LLM credential (the operator's refs in the
-  // tenant's .credentials.yaml), so a personal key saved earlier never overrides it.
-  // A stale personal key used to shadow a fixed platform key and surface as
-  // "API key is invalid" on every turn. The stored key is kept, not decrypted or injected.
-  const resolveApiKey = async (_userId: string): Promise<string | null> => null
+  // Every tenant runs on the platform's LLM credential. The personal key a user saved
+  // is no longer decrypted or injected, so it cannot shadow the platform key.
+  const resolveApiKey = async (_userId: string): Promise<string | null> => platformApiKey(process.env)
   const resolveUid = async (userId: string): Promise<number> => {
     const user = await db.findUserById(userId)
     return user?.uid ?? hashUid(userId, config.baseUid)
