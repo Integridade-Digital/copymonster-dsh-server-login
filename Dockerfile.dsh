@@ -28,8 +28,9 @@ FROM ${NODE_IMAGE}
 # The harness CLI (bin `dsh`); published to npm as a prebuilt release candidate.
 # Install into a project so npm applies a targeted transitive override.
 RUN mkdir -p /opt/dsh \
-  && printf '%s\n' '{"private":true,"dependencies":{"@deepseek-ai/dsh":"0.2.2-rc.5"},"overrides":{"undici@8.11.2":"8.12.4"}}' > /opt/dsh/package.json \
-  && npm install --prefix /opt/dsh --omit=dev --no-audit --no-fund
+  && printf '%s\n' '{"private":true,"dependencies":{"@deepseek-ai/dsh":"0.2.2-rc.5","undici":"8.12.4"},"overrides":{"@deepseek-ai/dsh-http-proxy":{"undici":"8.12.4"},"@deepseek-ai/dsh-web-fetch-http":{"undici":"8.12.4"},"@deepseek-ai/dsh-experimental-liveshare":{"undici":"8.12.4"}}}' > /opt/dsh/package.json \
+  && npm install --prefix /opt/dsh --omit=dev --no-audit --no-fund \
+  && node -e 'const entries = Object.entries(require("/opt/dsh/package-lock.json").packages); if (entries.some(([path, meta]) => path.endsWith("/undici") && meta.version === "8.11.2")) throw new Error("The vulnerable undici version is still installed")'
 ENV PATH="/opt/dsh/node_modules/.bin:${PATH}"
 # Runtime plugin: only lib/ (runtime.js is zero-dependency) + its manifest
 # (exports["./runtime"]). The control-plane stack (fastify/pg/better-sqlite3)
