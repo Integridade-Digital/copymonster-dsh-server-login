@@ -6,6 +6,7 @@
  */
 
 import type { ServerConfig } from '../config.js'
+import { loadPlatformRouting } from '../supervisor/platform-routing.js'
 import type { Endpoint } from '../supervisor/spawner.js'
 import { FILE_SERVICE_PORT } from '../web/file-service.js'
 import { K8sUserFs, type EnsureFileService } from './k8s-user-fs.js'
@@ -33,5 +34,5 @@ export function createUserFs(config: ServerConfig, ensureFileService?: EnsureFil
   if (config.deployMode === 'k8s' && ensureFileService !== undefined) {
     return new K8sUserFs(ensureFileService, (userId) => fileServiceEndpoint(config.k8sNamespace, userId))
   }
-  return new LocalUserFs((userId) => userRoot(config.dataRoot, userId))
+  return new LocalUserFs((userId) => userRoot(config.dataRoot, userId), () => loadPlatformRouting(config))
 }
