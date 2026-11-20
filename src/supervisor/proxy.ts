@@ -22,10 +22,8 @@ import { IDENTITY_TTL_MS } from '../identity.js'
 import { ProvisioningConflict, type Endpoint, type TenantState } from './spawner.js'
 import { renderPatch } from './patch.js'
 
-// Keep-alive pool for per-user DSH upstreams. Replaced (not just destroyed) on a
-// connection error, because a Pod rebuild changes its IP and any pooled socket
-// to the old IP would keep failing (docs/k8s.md §5.4).
-let upstreamAgent = new Agent({ keepAlive: true, maxSockets: 32 })
+const upstreamAgent = new Agent({ keepAlive: true, maxSockets: 32 })
+const UPSTREAM_HEADERS_TIMEOUT_MS = 30_000
 
 // Headers the DSH's browser-trust fence must NOT see from the browser, so the
 // proxied request looks like a clean loopback client (its Host is overridden to
@@ -204,6 +202,9 @@ function proxyHttp(
   identity?: string,
 ): void {
   reply.hijack()
+  const replayable = (request.method === 'GET' || request.method === 'HEAD')
+    && request.headers['transfer-encoding'] === undefined
+    && (request.headers['content-length'] === undefined || request.headers['content-length'] === '0')
   const attempt = (retry: boolean): void => {
     const upstream = httpRequest(
       {
@@ -220,6 +221,8 @@ function proxyHttp(
         headers: buildUpstreamHeaders(request.headers, endpoint.port, publicHost, identity),
       },
       (upRes: IncomingMessage) => {
+        clearTimeout(deadline)
+        upRes.on('error', () => reply.raw.destroy())
         const headers = { ...upRes.headers }
         const location = upRes.headers.location
         if (
@@ -246,24 +249,35 @@ function proxyHttp(
         upRes.pipe(reply.raw)
       },
     )
-    upstream.on('error', (err) => {
-      if (retry) {
-        if (!reply.raw.headersSent) {
-          reply.raw.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' })
-          reply.raw.end(getLaunchingHtml())
-        } else {
-          reply.raw.destroy()
-        }
+    const cancel = (): void => {
+      clearTimeout(deadline)
+      upstream.destroy()
+    }
+    const deadline = setTimeout(() => {
+      request.log.warn({ upstreamPort: endpoint.port }, 'DSH upstream response headers timed out')
+      reply.raw.writeHead(504, { 'content-type': 'application/json' })
+      reply.raw.end(JSON.stringify({ error: 'dsh_upstream_timeout' }))
+      cancel()
+    }, UPSTREAM_HEADERS_TIMEOUT_MS)
+    reply.raw.once('close', cancel)
+    upstream.once('close', () => reply.raw.off('close', cancel))
+    upstream.on('error', (err: NodeJS.ErrnoException) => {
+      clearTimeout(deadline)
+      if (reply.raw.destroyed || reply.raw.writableEnded) return
+      if (!reply.raw.headersSent && replayable && !retry && upstream.reusedSocket && err.code === 'ECONNRESET') {
+        reply.raw.off('close', cancel)
+        attempt(true)
         return
       }
-      // A stale keep-alive socket or a Pod that just restarted: drop the pool,
-      // replace it with a fresh one, and retry once on a fresh connection.
-      upstreamAgent.destroy()
-      upstreamAgent = new Agent({ keepAlive: true, maxSockets: 32 })
-      request.raw.unpipe(upstream)
-      attempt(true)
+      if (reply.raw.headersSent) {
+        reply.raw.destroy()
+        return
+      }
+      reply.raw.writeHead(503, { 'content-type': 'text/html; charset=utf-8', 'retry-after': '2' })
+      reply.raw.end(getLaunchingHtml())
     })
-    request.raw.pipe(upstream)
+    if (replayable) upstream.end()
+    else request.raw.pipe(upstream)
   }
   attempt(false)
 }

@@ -4,6 +4,8 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import Fastify from 'fastify'
+import { createServer } from 'node:http'
+import { once } from 'node:events'
 import { dshRoutes } from '../lib/web/routes/dsh.js'
 import { authRoutes } from '../lib/web/routes/auth.js'
 import { registerDshProxy, parseSubdomain } from '../lib/supervisor/proxy.js'
@@ -164,6 +166,31 @@ test('Fase 5 / Teste D: a starting tenant keeps the launching page', async () =>
   assert.equal(res.statusCode, 200)
   assert.match(res.body, /Iniciando|Carregando|loading/i)
   await app.close()
+})
+
+test('an upstream that never sends headers gets a bounded 504', { timeout: 5_000 }, async (t) => {
+  const upstream = createServer()
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const { app, tenant, sessions } = makeApp()
+  t.after(async () => {
+    upstream.closeAllConnections()
+    upstream.close()
+    await app.close()
+  })
+  const { cookie, tokenHash } = sessionCookie(tenant)
+  sessions.set(tokenHash, { expiresAt: Date.now() + 60_000 })
+  app.supervisor.endpointFor = async () => ({ host: '127.0.0.1', port: upstream.address().port })
+  await registerDshProxy(app)
+
+  t.mock.timers.enable({ apis: ['setTimeout'] })
+  const received = once(upstream, 'request')
+  const pending = app.inject({ method: 'GET', url: '/', headers: { ...host(), cookie } })
+  await received
+  t.mock.timers.tick(30_000)
+  const response = await pending
+  assert.equal(response.statusCode, 504)
+  assert.deepEqual(response.json(), { error: 'dsh_upstream_timeout' })
 })
 
 test('Fase 5 / status: reports state and lastError for a refused launch', async () => {
