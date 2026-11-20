@@ -9,6 +9,8 @@ import { lstatSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync,
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { LocalUserFs } from '../lib/fs/local-user-fs.js'
+import { loadPlatformRouting } from '../lib/supervisor/platform-routing.js'
+import { createHmac } from 'node:crypto'
 
 const USER = 'u1'
 
@@ -268,4 +270,35 @@ test('initUserRoot creates tenant root even when no template exists', async (t) 
   const userRoot = join(dataRoot, 'users', USER)
   assert.ok(existsSync(join(userRoot, 'home')), 'home created')
   assert.ok(existsSync(join(userRoot, 'ws')), 'workspace created')
+})
+
+
+test('central routing replaces a legacy profile on provisioning and applies to new tenants', async (t) => {
+  const { dataRoot, fs } = makeUser(t)
+  useTemplate(t, makeTemplate(dataRoot))
+  await fs.initUserRoot(USER)
+  const config = { mainAppUrl: 'http://main-app.test', sessionSecret: 'test-platform-routing-secret-only' }
+  const fetchMock = t.mock.method(globalThis, 'fetch', async (url, options) => {
+    assert.equal(String(url), 'http://main-app.test/api/internal/platform-model-routing')
+    const issued = options.headers['x-dsh-routing-issued']
+    assert.equal(options.headers['x-dsh-routing-signature'],
+      createHmac('sha256', config.sessionSecret)
+        .update(`GET /api/internal/platform-model-routing\n${issued}`).digest('hex'))
+    return Response.json({ policy: {
+      primaryProvider: 'deepseek',
+      primaryModel: 'deepseek-v4.1-flash',
+      fallbackProvider: 'deepseek',
+      fallbackModel: 'deepseek-v4-pro',
+      fallbackPolicy: { enabled: true, maxAttempts: 2, timeoutMs: 30000 },
+    } })
+  })
+  const centralFs = new LocalUserFs((id) => join(dataRoot, 'users', id), () => loadPlatformRouting(config))
+  for (const id of [USER, 'new-user']) {
+    await centralFs.initUserRoot(id)
+    const patch = readFileSync(join(dataRoot, 'users', id, 'home', 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
+    assert.match(patch, /primaryProvider: "deepseek"\s+primaryModel: "deepseek-v4\.1-flash"/)
+    assert.match(patch, /fallbackProvider: "deepseek"\s+fallbackModel: "deepseek-v4-pro"/)
+    assert.ok(!patch.includes(config.sessionSecret))
+  }
+  assert.equal(fetchMock.mock.callCount(), 2)
 })

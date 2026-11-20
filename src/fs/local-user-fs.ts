@@ -127,7 +127,7 @@ interface TenantModelRoute {
 }
 
 /** Platform routing the tenant profile's model-mask row carries. */
-interface TenantRoutingPolicy {
+export interface TenantRoutingPolicy {
   readonly primary: TenantModelRoute
   readonly fallback: TenantModelRoute
   readonly failoverEnabled: boolean
@@ -561,13 +561,20 @@ function ensureProviderModel(cordisPatchPath: string, provider: string, modelId:
  * @param cordisPatchPath - the profile's `cordis.patch.yml`.
  * @param policy - platform routing the tenant must resolve the alias to.
  */
-function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPolicy): void {
+function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPolicy, strict = false): void {
   try {
-    if (!existsSync(cordisPatchPath)) return
+    if (!existsSync(cordisPatchPath)) {
+      if (strict) throw new Error('Tenant profile patch is missing')
+      return
+    }
     // The mask resolves the alias to these routes at dispatch time, so the
     // profile must advertise both or the tenant turn fails as UNKNOWN_MODEL.
-    ensureProviderModel(cordisPatchPath, policy.primary.provider, policy.primary.model)
-    ensureProviderModel(cordisPatchPath, policy.fallback.provider, policy.fallback.model)
+    if (policy.primary.provider && policy.primary.model) {
+      ensureProviderModel(cordisPatchPath, policy.primary.provider, policy.primary.model)
+    }
+    if (policy.fallback.provider && policy.fallback.model) {
+      ensureProviderModel(cordisPatchPath, policy.fallback.provider, policy.fallback.model)
+    }
     writePatchRow(cordisPatchPath, MODEL_MASK_ROW_ID, [
       `- id: ${MODEL_MASK_ROW_ID}`,
       `  name: "${MODEL_MASK_BUNDLE}"`,
@@ -575,10 +582,10 @@ function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPoli
       `    virtualProvider: ${TENANT_MODEL_PROVIDER}`,
       `    virtualModel: ${TENANT_MODEL_ID}`,
       '    virtualModelName: Model CopyMonster',
-      `    primaryProvider: ${policy.primary.provider}`,
-      `    primaryModel: ${policy.primary.model}`,
-      `    fallbackProvider: ${policy.fallback.provider}`,
-      `    fallbackModel: ${policy.fallback.model}`,
+      `    primaryProvider: ${strict ? JSON.stringify(policy.primary.provider) : policy.primary.provider}`,
+      `    primaryModel: ${strict ? JSON.stringify(policy.primary.model) : policy.primary.model}`,
+      `    fallbackProvider: ${strict ? JSON.stringify(policy.fallback.provider) : policy.fallback.provider}`,
+      `    fallbackModel: ${strict ? JSON.stringify(policy.fallback.model) : policy.fallback.model}`,
       `    fallbackPolicy:`,
       `      enabled: ${policy.failoverEnabled}`,
       `      maxAttempts: ${policy.maxAttempts}`,
@@ -586,6 +593,7 @@ function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPoli
       `    applyToTenantsOnly: true`,
     ])
   } catch (error) {
+    if (strict) throw error
     warnProvisioning('ensure model-mask profile entry', cordisPatchPath, error)
   }
 }
@@ -646,7 +654,10 @@ function linkBundlePackage(userModules: string, templateModules: string | undefi
 }
 
 export class LocalUserFs implements UserFs {
-  constructor(private readonly rootFor: UserRootResolver) {}
+  constructor(
+    private readonly rootFor: UserRootResolver,
+    private readonly loadRouting?: () => Promise<TenantRoutingPolicy | undefined>,
+  ) {}
 
   /**
    * Provision a tenant root and keep its web profile aligned with the template.
@@ -656,6 +667,7 @@ export class LocalUserFs implements UserFs {
    *   MCP bundle's profile row pins it.
    */
   async initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void> {
+    const platformRouting = await this.loadRouting?.()
     const root = this.rootFor(userId)
     ensureDir(homeRoot(root))
     ensureDir(workspaceRoot(root))
@@ -764,7 +776,7 @@ export class LocalUserFs implements UserFs {
     // carrying the platform routing the operator configured in Settings, and pin
     // the default selection to that alias on every launch.
     const cordisPatchPath = join(userProfile, 'cordis.patch.yml')
-    ensureModelMaskEntry(cordisPatchPath, tenantRoutingPolicy(templateProfile))
+    ensureModelMaskEntry(cordisPatchPath, platformRouting ?? tenantRoutingPolicy(templateProfile), platformRouting !== undefined)
     ensureAgentDefaultModel(cordisPatchPath)
 
     // The operator configures the provider once; every tenant consumes it.
