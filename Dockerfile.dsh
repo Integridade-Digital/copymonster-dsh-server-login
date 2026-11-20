@@ -28,8 +28,7 @@ FROM ${NODE_IMAGE}
 # The harness CLI (bin `dsh`); published to npm as a prebuilt release candidate.
 # Install into a project so npm applies a targeted transitive override.
 RUN mkdir -p /opt/dsh \
-  && printf '%s
-' '{"private":true,"dependencies":{"@deepseek-ai/dsh":"0.2.2-rc.5"},"overrides":{"undici@8.11.2":"8.12.4"}}' > /opt/dsh/package.json \
+  && printf '%s\n' '{"private":true,"dependencies":{"@deepseek-ai/dsh":"0.2.2-rc.5"},"overrides":{"undici@8.11.2":"8.12.4"}}' > /opt/dsh/package.json \
   && npm install --prefix /opt/dsh --omit=dev --no-audit --no-fund
 ENV PATH="/opt/dsh/node_modules/.bin:${PATH}"
 # Runtime plugin: only lib/ (runtime.js is zero-dependency) + its manifest
