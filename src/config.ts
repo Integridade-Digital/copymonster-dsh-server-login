@@ -4,7 +4,7 @@
  * @module dsh-server-login/config
  */
 
-import { randomBytes } from 'node:crypto'
+import { randomBytes, createHmac } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir, hostname } from 'node:os'
 import { join } from 'node:path'
@@ -118,6 +118,12 @@ export interface ServerConfig {
   sessionSecret: string
   /** Base URL of the main app that owns Supabase session-token exchange. */
   mainAppUrl: string
+  /** Loopback host for internal LLM gateway (default 127.0.0.1). */
+  llmGatewayHost: string
+  /** Loopback port for internal LLM gateway (default 4010). */
+  llmGatewayPort: number
+  /** Internal HMAC secret for tenant LLM inference tokens. */
+  gatewayInternalSecret: string
 }
 
 /** Untyped overrides collected from argv / env. */
@@ -155,6 +161,9 @@ export interface ConfigOverrides {
   supabaseAnonKey?: string
   sessionSecret?: string
   mainAppUrl?: string
+  llmGatewayHost?: string
+  llmGatewayPort?: number | string
+  gatewayInternalSecret?: string
 }
 
 const DEFAULT_HOST = '127.0.0.1'
@@ -346,6 +355,27 @@ function toDeployMode(value: string | undefined): DeployMode | undefined {
  * `~/.dsh-server-login` (always writable for dev); production sets
  * `DSH_SERVER_LOGIN_DATA_ROOT=/var/lib/dsh-server-login`.
  */
+
+/** Load internal gateway secret from env, or persist a generated one at
+ * `<dataRoot>/.gateway-secret` (0600) so it survives restarts. */
+function resolveGatewaySecret(dataRoot: string, sessionSecret?: string): string {
+  const fromEnv = process.env.GATEWAY_INTERNAL_SECRET
+  if (fromEnv !== undefined && fromEnv !== '') return fromEnv
+  const path = join(dataRoot, '.gateway-secret')
+  try {
+    const existing = readFileSync(path, 'utf8').trim()
+    if (existing.length >= 32) return existing
+  } catch {}
+  const generated =
+    sessionSecret && sessionSecret.length >= 32
+      ? createHmac('sha256', sessionSecret).update('copymonster-llm-gateway-secret').digest('hex')
+      : randomBytes(32).toString('hex')
+  try {
+    writeFileSync(path, generated, { mode: 0o600 })
+  } catch {}
+  return generated
+}
+
 export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
   const dataRoot =
     overrides.dataRoot ?? process.env.DSH_SERVER_LOGIN_DATA_ROOT ?? join(homedir(), '.dsh-server-login')
@@ -410,6 +440,15 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     sessionSecret: overrides.sessionSecret ?? requireSessionSecret(process.env.SESSION_SECRET),
     mainAppUrl:
       overrides.mainAppUrl ?? process.env.DSH_SERVER_LOGIN_MAIN_APP_URL ?? DEFAULT_MAIN_APP_URL,
+    llmGatewayHost:
+      overrides.llmGatewayHost ?? process.env.COPYMONSTER_LLM_GATEWAY_HOST ?? '127.0.0.1',
+    llmGatewayPort:
+      (typeof overrides.llmGatewayPort === 'number'
+        ? overrides.llmGatewayPort
+        : parsePositiveInt('COPYMONSTER_LLM_GATEWAY_PORT', process.env.COPYMONSTER_LLM_GATEWAY_PORT)) ?? 4010,
+    gatewayInternalSecret:
+      overrides.gatewayInternalSecret ??
+      resolveGatewaySecret(dataRoot, overrides.sessionSecret ?? process.env.SESSION_SECRET),
   }
 }
 

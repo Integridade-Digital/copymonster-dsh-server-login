@@ -17,6 +17,7 @@ import { chmodSync, chownSync, existsSync, mkdirSync, readdirSync, writeFileSync
 import { join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import type { User } from '../db/types.js'
+import { createTenantToken } from '../gateway/token-validator.js'
 import {
   DEFAULT_SANDBOX_DATA_DIR,
   grantUserRootPermissions,
@@ -436,6 +437,36 @@ export class LocalSpawner implements Spawner {
     const workspace = workspaceRoot(root)
     const apiKey = await this.resolveApiKey(userId)
     const scrubbed = scrubEnv(process.env)
+
+    const user = await this.db.findUserById(userId)
+    const slug = user?.username ?? userId
+    const isAdmin = user?.role === 'admin'
+
+    const gatewaySecret =
+      this.config.gatewayInternalSecret && this.config.gatewayInternalSecret.length >= 16
+        ? this.config.gatewayInternalSecret
+        : 'copymonster-default-fallback-gateway-secret-32-chars'
+
+    const sessionToken = createTenantToken({
+      userId,
+      slug,
+      secret: gatewaySecret,
+    })
+
+    const gwHost = this.config.llmGatewayHost || '127.0.0.1'
+    const gwPort = this.config.llmGatewayPort || 4010
+    const gatewayUrl = `http://${gwHost}:${gwPort}/internal/v1/llm`
+
+    // Master API keys are ONLY injected for the administrator tenant.
+    // Common tenants receive strictly the internal session token and gateway URL,
+    // isolating master credentials 100% on the server.
+    const keysForTenant = isAdmin
+      ? {
+          ...platformApiKeys(process.env),
+          ...(apiKey !== null ? { DEEPSEEK_API_KEY: apiKey } : {}),
+        }
+      : {}
+
     return {
       ...scrubbed,
       PATH: sanitizePath(scrubbed.PATH ?? process.env.PATH),
@@ -449,10 +480,10 @@ export class LocalSpawner implements Spawner {
       ...(this.config.identityPublicKey === ''
         ? {}
         : { DSH_IDENTITY_PUBLIC_KEY: this.config.identityPublicKey }),
-      // Each user's own key; omit entirely when unset so the harness reports
-      // "no key" instead of a header-hostile value.
-      ...platformApiKeys(process.env),
-      ...(apiKey !== null ? { DEEPSEEK_API_KEY: apiKey } : {}),
+      // Internal loopback LLM gateway endpoint & scoped session token
+      COPYMONSTER_LLM_GATEWAY_URL: gatewayUrl,
+      COPYMONSTER_INTERNAL_SESSION_TOKEN: sessionToken,
+      ...keysForTenant,
     }
   }
 

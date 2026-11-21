@@ -28,6 +28,8 @@ import { desktopRoutes } from './routes/desktop.js'
 import { dshRoutes } from './routes/dsh.js'
 import { pluginRoutes } from './routes/plugins.js'
 import { domainRoutes } from './routes/domain.js'
+import { MasterCredentialsResolver } from '../supervisor/master-credentials.js'
+import { LlmLoopbackServer } from '../gateway/llm-loopback-server.js'
 
 declare module 'fastify' {
   interface FastifyInstance {
@@ -37,6 +39,8 @@ declare module 'fastify' {
     userFs: UserFs
     identity: IdentitySigner
     centralRoutingStore: CentralRoutingStore
+    masterCredentials: MasterCredentialsResolver
+    llmGateway: LlmLoopbackServer
   }
   interface FastifyRequest {
     user: PublicUser | null
@@ -143,6 +147,22 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   })
   await centralRoutingStore.loadOnBoot()
   app.decorate('centralRoutingStore', centralRoutingStore)
+
+  const masterCredentials = new MasterCredentialsResolver({
+    db,
+    dataRoot: config.dataRoot,
+    logger: app.log,
+  })
+  const llmGateway = new LlmLoopbackServer({
+    config,
+    db,
+    centralRoutingStore,
+    masterCredentials,
+    logger: app.log,
+  })
+  app.decorate('masterCredentials', masterCredentials)
+  app.decorate('llmGateway', llmGateway)
+
   app.decorateRequest('user', null)
 
   // Reverse proxy (subdomain + legacy subpath). Registered first so its global
@@ -161,6 +181,9 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   })
 
   app.addHook('onClose', async () => {
+    if (llmGateway.isRunning()) {
+      await llmGateway.stop()
+    }
     await supervisor.teardown()
     await db.close()
   })

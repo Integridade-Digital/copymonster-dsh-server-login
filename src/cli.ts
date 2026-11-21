@@ -77,6 +77,8 @@ function toOverrides(values: ParsedValues): ConfigOverrides {
     sessionTtlSeconds: str(values['session-ttl']),
     maxUploadBytes: str(values['max-upload']),
     isolationMode: str(values['isolation-mode']),
+    llmGatewayHost: str(values['llm-gateway-host']),
+    llmGatewayPort: str(values['llm-gateway-port']),
   }
 }
 
@@ -206,6 +208,8 @@ async function runServer(args: string[]): Promise<void> {
       'session-ttl': { type: 'string' },
       'max-upload': { type: 'string' },
       'isolation-mode': { type: 'string' },
+      'llm-gateway-port': { type: 'string' },
+      'llm-gateway-host': { type: 'string' },
       help: { type: 'boolean', short: 'h' },
     },
   })
@@ -218,6 +222,8 @@ async function runServer(args: string[]): Promise<void> {
   const config = resolveConfig(toOverrides(values as ParsedValues))
   assertProductionIsolation(config)
   const app = await buildServer(config)
+  await app.llmGateway.start()
+  app.log.info(`llm loopback gateway listening on http://${config.llmGatewayHost}:${config.llmGatewayPort}`)
   await app.listen({ host: config.host, port: config.port })
 
   const address = app.server.address()
