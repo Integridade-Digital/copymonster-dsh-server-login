@@ -440,7 +440,7 @@ export class LocalSpawner implements Spawner {
 
     const user = await this.db.findUserById(userId)
     const slug = user?.username ?? userId
-    const isAdmin = user?.role === 'admin'
+    const isMaster = user?.username === this.config.masterTenantUsername || user?.role === 'admin'
 
     const gatewaySecret =
       this.config.gatewayInternalSecret && this.config.gatewayInternalSecret.length >= 16
@@ -457,10 +457,10 @@ export class LocalSpawner implements Spawner {
     const gwPort = this.config.llmGatewayPort || 4010
     const gatewayUrl = `http://${gwHost}:${gwPort}/internal/v1/llm`
 
-    // Master API keys are ONLY injected for the administrator tenant.
-    // Common tenants receive strictly the internal session token and gateway URL,
-    // isolating master credentials 100% on the server.
-    const keysForTenant = isAdmin
+    // Master API keys are ONLY injected for the master account. Common tenants
+    // receive strictly the internal session token and gateway URL, isolating
+    // master credentials 100% on the server.
+    const keysForTenant = isMaster
       ? {
           ...platformApiKeys(process.env),
           ...(apiKey !== null ? { DEEPSEEK_API_KEY: apiKey } : {}),

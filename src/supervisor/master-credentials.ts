@@ -18,6 +18,12 @@ const CACHE_TTL_MS = 30_000
 export interface MasterCredentialsOptions {
   db: Pick<DbAdapter, 'findUserByUsername' | 'listPublicUsers'>
   dataRoot: string
+  /**
+   * Username of the account that owns the master provider credentials.
+   * This account is authoritative even when its role is not `admin`, because
+   * operators configure provider keys while signed in to it.
+   */
+  masterUsername: string
   logger?: {
     info(msg: string, ...args: unknown[]): void
     warn(msg: string, ...args: unknown[]): void
@@ -109,12 +115,14 @@ export function redactApiKey(key: string | undefined | null): string {
 export class MasterCredentialsResolver {
   private readonly db: MasterCredentialsOptions['db']
   private readonly dataRoot: string
+  private readonly masterUsername: string
   private readonly logger?: MasterCredentialsOptions['logger']
   private cache: CacheEntry | null = null
 
   constructor(options: MasterCredentialsOptions) {
     this.db = options.db
     this.dataRoot = options.dataRoot
+    this.masterUsername = options.masterUsername
     this.logger = options.logger
   }
 
@@ -126,15 +134,14 @@ export class MasterCredentialsResolver {
   }
 
   /**
-   * Find the master admin tenant user row.
-   * Priority: username "funel" -> first user with role "admin".
+   * Find the master tenant user row.
+   * The configured master username wins regardless of role; only when that
+   * account does not exist does the resolver fall back to the first `admin`.
    */
   public async findAdminUserId(): Promise<string | undefined> {
     try {
-      const funelUser = await this.db.findUserByUsername('funel')
-      if (funelUser && funelUser.role === 'admin') {
-        return funelUser.id
-      }
+      const master = await this.db.findUserByUsername(this.masterUsername)
+      if (master) return master.id
       const users = await this.db.listPublicUsers()
       const admin = users.find((u) => u.role === 'admin')
       return admin?.id

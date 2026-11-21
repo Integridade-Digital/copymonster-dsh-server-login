@@ -114,6 +114,8 @@ export interface ServerConfig {
   supabaseUrl: string
   /** Supabase anon/public key (required for Supabase Auth integration). */
   supabaseAnonKey: string
+  /** Supabase service_role key (required for reading system_config with RLS). */
+  supabaseServiceRoleKey: string
   /** HMAC key for the signed `sid` cookie; shared with the main app. */
   sessionSecret: string
   /** Base URL of the main app that owns Supabase session-token exchange. */
@@ -124,6 +126,8 @@ export interface ServerConfig {
   llmGatewayPort: number
   /** Internal HMAC secret for tenant LLM inference tokens. */
   gatewayInternalSecret: string
+  /** Username of the account that owns the master provider credentials. */
+  masterTenantUsername: string
 }
 
 /** Untyped overrides collected from argv / env. */
@@ -159,11 +163,13 @@ export interface ConfigOverrides {
   podName?: string
   supabaseUrl?: string
   supabaseAnonKey?: string
+  supabaseServiceRoleKey?: string
   sessionSecret?: string
   mainAppUrl?: string
   llmGatewayHost?: string
   llmGatewayPort?: number | string
   gatewayInternalSecret?: string
+  masterTenantUsername?: string
 }
 
 const DEFAULT_HOST = '127.0.0.1'
@@ -174,6 +180,7 @@ const DEFAULT_SESSION_TTL_SECONDS = 60 * 60 * 24 * 7
 const DEFAULT_MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 const DEFAULT_RESTART_BACKOFF_MS = 1000
 const DEFAULT_ISOLATION_MODE: IsolationMode = 'account'
+const DEFAULT_MASTER_TENANT_USERNAME = 'funel'
 function defaultSpawnAsUserCommand(): string[] {
   const binary =
     ['/usr/bin/setpriv', '/bin/setpriv', '/usr/local/bin/setpriv'].find((p) => existsSync(p)) ??
@@ -437,6 +444,7 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     podName: overrides.podName ?? process.env.POD_NAME ?? hostname(),
     supabaseUrl: overrides.supabaseUrl ?? requireEnv('DSH_SERVER_LOGIN_SUPABASE_URL'),
     supabaseAnonKey: overrides.supabaseAnonKey ?? requireEnv('DSH_SERVER_LOGIN_SUPABASE_ANON_KEY'),
+    supabaseServiceRoleKey: overrides.supabaseServiceRoleKey ?? requireEnv('DSH_SERVER_LOGIN_SUPABASE_SERVICE_ROLE_KEY'),
     sessionSecret: overrides.sessionSecret ?? requireSessionSecret(process.env.SESSION_SECRET),
     mainAppUrl:
       overrides.mainAppUrl ?? process.env.DSH_SERVER_LOGIN_MAIN_APP_URL ?? DEFAULT_MAIN_APP_URL,
@@ -449,6 +457,10 @@ export function resolveConfig(overrides: ConfigOverrides = {}): ServerConfig {
     gatewayInternalSecret:
       overrides.gatewayInternalSecret ??
       resolveGatewaySecret(dataRoot, overrides.sessionSecret ?? process.env.SESSION_SECRET),
+    masterTenantUsername:
+      overrides.masterTenantUsername ??
+      process.env.DSH_SERVER_LOGIN_MASTER_TENANT ??
+      DEFAULT_MASTER_TENANT_USERNAME,
   }
 }
 

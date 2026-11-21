@@ -14,7 +14,7 @@ import { parseArgs } from 'node:util'
 import { assertProductionIsolation, resolveConfig, type ConfigOverrides } from './config.js'
 import { createDbAdapter } from './db/index.js'
 import { createUserFs } from './fs/provider.js'
-import { sanitizeTenantCredentials } from './fs/local-user-fs.js'
+import { sanitizeAllTenantCredentials } from './fs/local-user-fs.js'
 import { homeRoot, userRoot } from './fs/workspace.js'
 import { hashPassword } from './web/auth.js'
 import { hashUid } from './isolation.js'
@@ -182,7 +182,7 @@ async function backfillLlmMask(args: string[]): Promise<void> {
     const uid = user.uid
     const origin = publicOriginForUser(config.baseDomain, user.username)
     try {
-      await userFs.initUserRoot(userId, uid === null ? undefined : uid, origin, { isAdmin: user.role === 'admin' || user.username === 'funel' })
+      await userFs.initUserRoot(userId, uid === null ? undefined : uid, origin, { isAdmin: user.role === 'admin' || user.username === config.masterTenantUsername })
       await db.setUserLlmMaskVersion(userId, targetVersion)
       console.log(`  backfilled user ${user.username} (${userId}) -> v${targetVersion}`)
     } catch (error) {
@@ -352,15 +352,11 @@ async function sanitizeCredentialsCmd(args: string[]): Promise<void> {
   })
   const config = resolveConfig({ dbPath: values.db, dataRoot: values['data-root'] })
   const db = await createDbAdapter(config)
-  const users = await db.listPublicUsers()
-  let sanitizedCount = 0
-
-  for (const user of users) {
-    if (user.role === 'admin' || user.username === 'funel') continue
-    const home = homeRoot(userRoot(config.dataRoot, user.id))
-    sanitizeTenantCredentials(home)
-    sanitizedCount++
-  }
+  const sanitizedCount = await sanitizeAllTenantCredentials({
+    db,
+    dataRoot: config.dataRoot,
+    masterUsername: config.masterTenantUsername,
+  })
 
   await db.close()
   console.log(`sanitize-credentials: processed ${sanitizedCount} tenant(s)`)

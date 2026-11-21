@@ -1,5 +1,5 @@
 import { CentralRoutingStore } from '../config/llm-central-store.js'
-import { getSupabaseClient } from '../supabase.js'
+import { createClient, type SupabaseClient } from '@supabase/supabase-js'
 /**
  * Fastify bootstrap: assembles the HTTP server, registers plugins and routes,
  * and owns the DB lifecycle via the close hook.
@@ -13,6 +13,7 @@ import { dirname, join } from 'node:path'
 import type { ServerConfig } from '../config.js'
 import { createDbAdapter, type DbAdapter, type PublicUser } from '../db/index.js'
 import { createUserFs } from '../fs/provider.js'
+import { sanitizeAllTenantCredentials } from '../fs/local-user-fs.js'
 import type { UserFs } from '../fs/user-fs.js'
 import { hashUid } from '../isolation.js'
 import { LocalSpawner } from '../supervisor/orchestrator.js'
@@ -114,6 +115,19 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
       : new LocalSpawner(config, resolveApiKey, resolveUid, db)
   const userFs = createUserFs(config, (userId) => supervisor.ensureFileService(userId))
 
+  // The loopback gateway is the only path a common tenant uses to reach a
+  // provider, so no tenant vault may keep a master key. Sweeping at boot makes
+  // the cleanup durable for tenants provisioned before the gateway existed;
+  // the master account's own vault is preserved.
+  if (config.deployMode === 'local') {
+    const inspected = await sanitizeAllTenantCredentials({
+      db,
+      dataRoot: config.dataRoot,
+      masterUsername: config.masterTenantUsername,
+    })
+    process.stdout.write(`[credentials] tenant vaults checked for master keys: ${inspected}\n`)
+  }
+
   const app = Fastify({
     logger: {
       level: config.logLevel,
@@ -139,10 +153,11 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
 
   // Centralized LLM routing store: reads from Supabase public.system_config
   // on boot with disk/memory fallback cache.
-  let sbClient = null
-  if (config.supabaseUrl && config.supabaseAnonKey) {
+  // Use service_role key to bypass RLS on system_config table.
+  let sbClient: SupabaseClient | null = null
+  if (config.supabaseUrl && config.supabaseServiceRoleKey) {
     try {
-      sbClient = getSupabaseClient(config)
+      sbClient = createClient(config.supabaseUrl, config.supabaseServiceRoleKey)
     } catch (err) {
       app.log.warn(`[server] Failed to initialize Supabase client for LLM routing: ${String(err)}`)
     }
@@ -158,6 +173,7 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   const masterCredentials = new MasterCredentialsResolver({
     db,
     dataRoot: config.dataRoot,
+    masterUsername: config.masterTenantUsername,
     logger: app.log,
   })
   const llmGateway = new LlmLoopbackServer({

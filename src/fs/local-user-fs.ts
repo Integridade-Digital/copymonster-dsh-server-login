@@ -27,8 +27,9 @@ import { fileURLToPath } from 'node:url'
 import { dump as dumpYaml, load as loadYaml } from 'js-yaml'
 import { PathEscapeError, resolveWithinRoot, safeFilename } from '../web/middleware/fs-guard.js'
 import { listInstalledPlugins, type PluginInfo } from './plugins.js'
+import type { DbAdapter } from '../db/adapter.js'
 import { UserFsError, type UserFs } from './user-fs.js'
-import { ensureDir, grantUserRootPermissions, grantUserSandboxPermissions, handoffPath, homeRoot, listDir, rejectSymlinkEscape, workspaceRoot, type FsEntry } from './workspace.js'
+import { ensureDir, grantUserRootPermissions, grantUserSandboxPermissions, handoffPath, homeRoot, listDir, rejectSymlinkEscape, userRoot, workspaceRoot, type FsEntry } from './workspace.js'
 
 /** Resolve a user id to that user's data root (`<dataRoot>/users/<id>`, or a
  * fixed directory when the sidecar serves exactly one user). */
@@ -321,6 +322,33 @@ export function sanitizeTenantCredentials(home: string): void {
 }
 
 /**
+ * Purge master provider keys from every non-master tenant vault.
+ *
+ * Runs on each boot so a tenant provisioned before the loopback gateway
+ * existed cannot keep a parallel credential source across restarts. The
+ * master account (configured username or any `admin`) is preserved because it
+ * owns the provider keys the gateway reads. Idempotent: a vault without master
+ * keys is not rewritten.
+ *
+ * @param options - tenant source, data root, and the master account to preserve.
+ * @returns the number of tenant homes inspected.
+ */
+export async function sanitizeAllTenantCredentials(options: {
+  db: Pick<DbAdapter, 'listPublicUsers'>
+  dataRoot: string
+  masterUsername: string
+}): Promise<number> {
+  const users = await options.db.listPublicUsers()
+  let inspected = 0
+  for (const user of users) {
+    if (user.role === 'admin' || user.username === options.masterUsername) continue
+    sanitizeTenantCredentials(homeRoot(userRoot(options.dataRoot, user.id)))
+    inspected++
+  }
+  return inspected
+}
+
+/**
  * Prepare the shared workspace sandbox for tenant uids.
  *
  * The sandbox lives at `<dir>/<tenantId>/<userId>/workspaces` and is created by
@@ -568,24 +596,18 @@ function ensureProviderModel(cordisPatchPath: string, provider: string, modelId:
 
 /**
  * Ensure the tenant's `cordis.patch.yml` mounts the model-mask bundle with the
- * virtual CopyMonster model and the platform routing policy. Idempotent: an
- * existing row is rewritten, a missing row is appended.
+ * virtual CopyMonster model. The mask routes ALL requests through the central
+ * loopback gateway (127.0.0.1:4010) which reads the live routing policy from
+ * Supabase (Settings > Models). No local primary/fallback routing is configured
+ * here — the gateway is the single source of truth.
  * @param cordisPatchPath - the profile's `cordis.patch.yml`.
- * @param policy - platform routing the tenant must resolve the alias to.
+ * @param _policy - unused (kept for signature compatibility).
  */
-function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPolicy, strict = false): void {
+function ensureModelMaskEntry(cordisPatchPath: string, _policy: TenantRoutingPolicy, _strict = false): void {
   try {
     if (!existsSync(cordisPatchPath)) {
-      if (strict) throw new Error('Tenant profile patch is missing')
+      if (_strict) throw new Error('Tenant profile patch is missing')
       return
-    }
-    // The mask resolves the alias to these routes at dispatch time, so the
-    // profile must advertise both or the tenant turn fails as UNKNOWN_MODEL.
-    if (policy.primary.provider && policy.primary.model) {
-      ensureProviderModel(cordisPatchPath, policy.primary.provider, policy.primary.model)
-    }
-    if (policy.fallback.provider && policy.fallback.model) {
-      ensureProviderModel(cordisPatchPath, policy.fallback.provider, policy.fallback.model)
     }
     writePatchRow(cordisPatchPath, MODEL_MASK_ROW_ID, [
       `- id: ${MODEL_MASK_ROW_ID}`,
@@ -594,18 +616,14 @@ function ensureModelMaskEntry(cordisPatchPath: string, policy: TenantRoutingPoli
       `    virtualProvider: ${TENANT_MODEL_PROVIDER}`,
       `    virtualModel: ${TENANT_MODEL_ID}`,
       '    virtualModelName: Model CopyMonster',
-      `    primaryProvider: ${strict ? JSON.stringify(policy.primary.provider) : policy.primary.provider}`,
-      `    primaryModel: ${strict ? JSON.stringify(policy.primary.model) : policy.primary.model}`,
-      `    fallbackProvider: ${strict ? JSON.stringify(policy.fallback.provider) : policy.fallback.provider}`,
-      `    fallbackModel: ${strict ? JSON.stringify(policy.fallback.model) : policy.fallback.model}`,
-      `    fallbackPolicy:`,
-      `      enabled: ${policy.failoverEnabled}`,
-      `      maxAttempts: ${policy.maxAttempts}`,
-      `      timeoutMs: ${policy.timeoutMs}`,
-      `    applyToTenantsOnly: true`,
+      '    fallbackPolicy:',
+      '      enabled: true',
+      '      maxAttempts: 2',
+      '      timeoutMs: 30000',
+      '    applyToTenantsOnly: true',
     ])
   } catch (error) {
-    if (strict) throw error
+    if (_strict) throw error
     warnProvisioning('ensure model-mask profile entry', cordisPatchPath, error)
   }
 }

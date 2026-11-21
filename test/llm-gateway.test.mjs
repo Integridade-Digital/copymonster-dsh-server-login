@@ -33,6 +33,7 @@ function createTestSetup(overrides = {}) {
   const credentialsResolver = new MasterCredentialsResolver({
     db: mockDb,
     dataRoot: '/tmp',
+    masterUsername: 'funel',
   })
 
   // Override resolveKeyForProvider if requested

@@ -41,6 +41,7 @@ refs:
   const resolver = new MasterCredentialsResolver({
     db: mockDb,
     dataRoot: root,
+    masterUsername: 'funel',
   })
 
   const openrouterKey = await resolver.resolveKeyForProvider('openrouter')
@@ -69,6 +70,7 @@ test('master credentials: falls back to environment variables', async () => {
     const resolver = new MasterCredentialsResolver({
       db: mockDb,
       dataRoot: '/tmp/nonexistent-dir',
+      masterUsername: 'funel',
     })
 
     const key = await resolver.resolveKeyForProvider('openrouter')
@@ -103,6 +105,7 @@ test('master credentials: cache invalidation on file mtime update', async (t) =>
   const resolver = new MasterCredentialsResolver({
     db: mockDb,
     dataRoot: root,
+    masterUsername: 'funel',
   })
 
   const key1 = await resolver.resolveKeyForProvider('openrouter')
