@@ -145,3 +145,29 @@ test('master credentials: redactSensitiveString and redactSensitiveObject mask a
   assert.equal(sanitized.headers.Authorization, 'Bearer [REDACTED_KEY]')
   assert.equal(sanitized.count, 42)
 })
+
+test('master credentials: redactSensitiveObject survives cyclic payloads and preserves class instances', () => {
+  const cyclic = { url: '/api/auth/session-token' }
+  cyclic.self = cyclic
+  const shared = { key: 'sk-or-v1-abcdef1234567890' }
+
+  const sanitized = redactSensitiveObject({ cyclic, sharedA: shared, sharedB: shared })
+  assert.equal(sanitized.cyclic.url, '/api/auth/session-token')
+  assert.equal(sanitized.cyclic.self, '[Circular]')
+  assert.equal(sanitized.sharedA.key, '[REDACTED_KEY]')
+  assert.equal(sanitized.sharedB.key, '[REDACTED_KEY]')
+
+  // Pino runs `formatters.log` before serializers, so the raw Fastify request
+  // (a class instance with a cyclic graph) must come back by reference.
+  class FastifyRequest {
+    constructor() {
+      this.raw = { method: 'POST' }
+      this.socket = this
+    }
+    get url() {
+      return '/api/auth/session-token'
+    }
+  }
+  const request = new FastifyRequest()
+  assert.equal(redactSensitiveObject(request), request)
+})

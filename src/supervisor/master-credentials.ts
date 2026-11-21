@@ -43,21 +43,54 @@ export function redactSensitiveString(text: string): string {
   return text.replace(SENSITIVE_KEY_PATTERN, '[REDACTED_KEY]')
 }
 
+/** Maximum depth traversed in a log payload; deeper values pass through unchanged. */
+const MAX_REDACTION_DEPTH = 10
+
+/** True for object literals and `Object.create(null)` records only. */
+function isPlainRecord(val: object): val is Record<string, unknown> {
+  const proto = Object.getPrototypeOf(val)
+  return proto === Object.prototype || proto === null
+}
+
+function redactValue(val: unknown, path: WeakSet<object>, depth: number): unknown {
+  if (typeof val === 'string') return redactSensitiveString(val)
+  if (val === null || typeof val !== 'object') return val
+  if (depth >= MAX_REDACTION_DEPTH) return val
+  // Pino's `formatters.log` runs before serializers and sees the raw Fastify
+  // request graph, which is cyclic. A shared reference is only circular while
+  // it is still on the current path, so entries are removed on the way back.
+  if (path.has(val)) return '[Circular]'
+  if (Array.isArray(val)) {
+    path.add(val)
+    try {
+      return val.map((item) => redactValue(item, path, depth + 1))
+    } finally {
+      path.delete(val)
+    }
+  }
+  // Class instances (requests, replies, errors, buffers, streams) are left
+  // untouched so the logger's own serializers still read their real properties.
+  if (!isPlainRecord(val)) return val
+  path.add(val)
+  try {
+    const out: Record<string, unknown> = {}
+    for (const [key, item] of Object.entries(val)) {
+      out[key] = redactValue(item, path, depth + 1)
+    }
+    return out
+  } finally {
+    path.delete(val)
+  }
+}
+
 /**
- * Recursively sanitize objects/strings by masking sensitive API keys.
+ * Recursively sanitize plain objects and arrays by masking sensitive API keys.
+ *
+ * Values that are not strings, arrays, or plain records (Fastify requests,
+ * errors, buffers, streams) are returned unchanged.
  */
 export function redactSensitiveObject<T>(val: T): T {
-  if (typeof val === 'string') {
-    return redactSensitiveString(val) as unknown as T
-  }
-  if (val && typeof val === 'object' && !(val instanceof Error)) {
-    const res: any = Array.isArray(val) ? [] : {}
-    for (const [k, v] of Object.entries(val)) {
-      res[k] = redactSensitiveObject(v)
-    }
-    return res as T
-  }
-  return val
+  return redactValue(val, new WeakSet<object>(), 0) as T
 }
 
 /**
