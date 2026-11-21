@@ -69,6 +69,7 @@ export class UpstreamLlmClient {
 
   /**
    * Determine the target provider and model for a request.
+   * Throws if no primary provider is configured (Admin must set Settings > Models > Provider routing).
    */
   public resolveTargetRoute(requestedModel: string, providerOverride?: string, modelOverride?: string): { provider: string; model: string } {
     if (providerOverride && modelOverride) {
@@ -76,7 +77,11 @@ export class UpstreamLlmClient {
     }
 
     const cfg = this.centralRoutingStore.getConfig()
-    const primary = cfg.failover?.primary ?? { provider: 'deepseek', model: 'deepseek-chat' }
+    const primary = cfg.failover?.primary
+
+    if (!primary || !primary.provider || !primary.model) {
+      throw new Error('UpstreamLlmClient: no primary provider configured. Admin must set Settings > Models > Provider routing (primary provider and model).')
+    }
 
     const trimmed = (requestedModel || '').trim()
 
@@ -99,7 +104,7 @@ export class UpstreamLlmClient {
       return { provider: 'anthropic', model: trimmed.slice('anthropic/'.length) }
     }
 
-    // Direct model name with known provider primary
+    // Direct model name with configured primary provider
     return { provider: primary.provider, model: trimmed }
   }
 

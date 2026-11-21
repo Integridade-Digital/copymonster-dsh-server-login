@@ -85,8 +85,10 @@ export const CentralRoutingConfigSchema = z.object({
 export type CentralRoutingConfig = z.infer<typeof CentralRoutingConfigSchema>
 
 /**
- * Baseline production defaults when no row exists in `system_config`
- * or during offline/fallback initialization.
+ * Minimal valid routing configuration template.
+ * The Admin MUST configure the primary provider and model via Settings > Models.
+ * This template provides only structural defaults (mask, empty routing slots, failover disabled).
+ * It does NOT contain any hardcoded provider — the gateway will fail explicitly if primary is not set.
  */
 export const DEFAULT_CENTRAL_ROUTING_CONFIG: CentralRoutingConfig = {
   version: 1,
@@ -98,36 +100,23 @@ export const DEFAULT_CENTRAL_ROUTING_CONFIG: CentralRoutingConfig = {
   },
   routing: {
     light: {
-      provider: 'deepseek',
-      model: 'deepseek-v4.1-flash',
+      provider: '',
+      model: '',
       tasks: ['summarization', 'chat_title', 'search', 'quick_reply'],
     },
     heavy: {
-      provider: 'deepseek',
-      model: 'deepseek-v4.1-pro',
+      provider: '',
+      model: '',
       tasks: ['code_refactor', 'long_form_copy', 'complex_reasoning'],
     },
   },
   failover: {
-    enabled: true,
+    enabled: false,
     primary: {
-      provider: 'deepseek',
-      model: 'deepseek-v4.1-pro',
+      provider: '',
+      model: '',
     },
-    chain: [
-      {
-        provider: 'deepseek',
-        model: 'deepseek-v4.1-flash',
-        maxRetries: 1,
-        timeoutMs: 15000,
-      },
-      {
-        provider: 'openrouter',
-        model: 'deepseek/deepseek-chat',
-        maxRetries: 1,
-        timeoutMs: 20000,
-      },
-    ],
+    chain: [],
   },
 }
 

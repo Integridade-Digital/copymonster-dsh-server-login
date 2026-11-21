@@ -11,7 +11,6 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   type CentralRoutingConfig,
   CentralRoutingConfigSchema,
-  DEFAULT_CENTRAL_ROUTING_CONFIG,
   SYSTEM_CONFIG_LLM_ROUTING_KEY,
 } from './llm-central-routing.js'
 
@@ -29,7 +28,7 @@ export interface CentralRoutingStoreOptions {
 }
 
 export class CentralRoutingStore {
-  private config: CentralRoutingConfig = DEFAULT_CENTRAL_ROUTING_CONFIG
+  private config: CentralRoutingConfig | null = null
   private readonly supabaseClient?: SupabaseClient | null
   private readonly cacheFilePath?: string
   private readonly logger?: CentralRoutingStoreOptions['logger']
@@ -44,8 +43,12 @@ export class CentralRoutingStore {
 
   /**
    * Return the currently active in-memory routing configuration.
+   * Throws if configuration has not been loaded yet.
    */
   public getConfig(): CentralRoutingConfig {
+    if (!this.config) {
+      throw new Error('CentralRoutingStore: routing configuration not loaded. Admin must configure Settings > Models > Provider routing.')
+    }
     return this.config
   }
 
@@ -54,7 +57,7 @@ export class CentralRoutingStore {
    * Priority:
    * 1. Supabase `public.system_config` (key = `llm.central_routing`)
    * 2. Local disk cache file (if Supabase is down or unreachable)
-   * 3. Built-in defaults
+   * Throws if no configuration is found — the Admin must configure Settings > Models > Provider routing.
    */
   public async loadOnBoot(): Promise<CentralRoutingConfig> {
     // 1. Try reading from Supabase
@@ -101,13 +104,10 @@ export class CentralRoutingStore {
       return this.config
     }
 
-    // 3. Fallback to built-in default
-    this.config = DEFAULT_CENTRAL_ROUTING_CONFIG
-    this.persistToDiskCache(this.config)
-    this.logger?.info?.(
-      '[CentralRoutingStore] Initialized LLM central routing with default production baseline',
-    )
-    return this.config
+    // 3. No configuration found — fail explicitly
+    const msg = 'CentralRoutingStore: no LLM routing configuration found in Supabase (system_config.llm.central_routing) or local cache. Admin must configure Settings > Models > Provider routing.'
+    this.logger?.error?.(`[CentralRoutingStore] ${msg}`)
+    throw new Error(msg)
   }
 
   /**
