@@ -1,7 +1,7 @@
 {
   "name": "dsh-server-login",
   "version": "0.1.0",
-  "description": "面向公网的多租户 DSH 托管平台：登录审核、每用户隔离的 DSH 环境（主 + 按需守护）、桌面与域名访问。",
+  "description": "\u9762\u5411\u516c\u7f51\u7684\u591a\u79df\u6237 DSH \u6258\u7ba1\u5e73\u53f0\uff1a\u767b\u5f55\u5ba1\u6838\u3001\u6bcf\u7528\u6237\u9694\u79bb\u7684 DSH \u73af\u5883\uff08\u4e3b + \u6309\u9700\u5b88\u62a4\uff09\u3001\u684c\u9762\u4e0e\u57df\u540d\u8bbf\u95ee\u3002",
   "type": "module",
   "main": "./lib/index.js",
   "exports": {
@@ -22,7 +22,7 @@
     "prepare": "npm run build",
     "dev": "node lib/cli.js",
     "typecheck": "tsc -p tsconfig.json --noEmit",
-    "test": "npm run build && node --test test/db.test.mjs test/k8s-spawner.test.mjs test/leader.test.mjs test/local-user-fs.test.mjs test/local-user-fs-mcp-bundles.test.mjs test/local-user-fs-provisioning.test.mjs test/session-cookie.test.mjs test/auth-sso.test.mjs test/scope-units.test.mjs test/sandbox-permissions.test.mjs test/isolation-defaults.test.mjs test/restart-handoff.test.mjs test/login-throttle.test.mjs test/security-headers.test.mjs test/subdomain-lifecycle.test.mjs test/uid-sequence.test.mjs test/provisioning-conflict.test.mjs test/platform-api-key.test.mjs test/patch.test.mjs test/llm-token-validator.test.mjs test/master-credentials.test.mjs test/orchestrator-gateway-env.test.mjs test/llm-gateway.test.mjs",
+    "test": "npm run build && node --test test/db.test.mjs test/k8s-spawner.test.mjs test/leader.test.mjs test/local-user-fs.test.mjs test/local-user-fs-mcp-bundles.test.mjs test/local-user-fs-provisioning.test.mjs test/session-cookie.test.mjs test/auth-sso.test.mjs test/scope-units.test.mjs test/sandbox-permissions.test.mjs test/isolation-defaults.test.mjs test/restart-handoff.test.mjs test/login-throttle.test.mjs test/security-headers.test.mjs test/subdomain-lifecycle.test.mjs test/uid-sequence.test.mjs test/provisioning-conflict.test.mjs test/platform-api-key.test.mjs test/patch.test.mjs test/llm-token-validator.test.mjs test/master-credentials.test.mjs test/orchestrator-gateway-env.test.mjs test/llm-gateway.test.mjs test/tenant-credentials-sanitization.test.mjs",
     "smoke": "node scripts/smoke.mjs",
     "smoke:admin": "node scripts/smoke-admin.mjs",
     "smoke:auth": "node scripts/smoke-auth.mjs",

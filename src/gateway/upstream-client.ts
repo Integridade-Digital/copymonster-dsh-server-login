@@ -6,7 +6,7 @@
 
 import { Readable } from 'node:stream'
 import type { CentralRoutingStore } from '../config/llm-central-store.js'
-import { MasterCredentialsResolver, redactApiKey } from '../supervisor/master-credentials.js'
+import { MasterCredentialsResolver, redactApiKey, redactSensitiveString } from '../supervisor/master-credentials.js'
 
 export interface ChatMessage {
   role: string
@@ -60,7 +60,11 @@ export class UpstreamLlmClient {
   constructor(options: UpstreamClientOptions) {
     this.masterCredentials = options.masterCredentials
     this.centralRoutingStore = options.centralRoutingStore
-    this.logger = options.logger
+    this.logger = options.logger ? {
+      info: (msg: string, ...args: unknown[]) => options.logger?.info?.(redactSensitiveString(msg), ...args),
+      warn: (msg: string, ...args: unknown[]) => options.logger?.warn?.(redactSensitiveString(msg), ...args),
+      error: (msg: string, ...args: unknown[]) => options.logger?.error?.(redactSensitiveString(msg), ...args),
+    } : undefined
   }
 
   /**

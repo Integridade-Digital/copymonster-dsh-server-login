@@ -273,7 +273,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           await app.db.setUserSupabaseSub(sub, sub)
           user.supabase_sub = sub
           try {
-            await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username))
+            await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === 'funel' })
             // Create the Linux account and its home now, while the operator is
             // still on the login screen: a provisioning conflict then surfaces
             // as a clear error here instead of an endless launching page.

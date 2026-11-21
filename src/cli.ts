@@ -14,6 +14,7 @@ import { parseArgs } from 'node:util'
 import { assertProductionIsolation, resolveConfig, type ConfigOverrides } from './config.js'
 import { createDbAdapter } from './db/index.js'
 import { createUserFs } from './fs/provider.js'
+import { sanitizeTenantCredentials } from './fs/local-user-fs.js'
 import { homeRoot, userRoot } from './fs/workspace.js'
 import { hashPassword } from './web/auth.js'
 import { hashUid } from './isolation.js'
@@ -111,7 +112,7 @@ async function bootstrapAdmin(args: string[]): Promise<void> {
   // Create the user before initUserRoot so the per-user uid (baseUid + row_id)
   // is already assigned — same reason as the register route.
   const user = await db.createUser({ id, username, passHash, role: 'admin', homeDir })
-  await createUserFs(config).initUserRoot(id, user.uid ?? undefined, publicOriginForUser(config.baseDomain, username))
+  await createUserFs(config).initUserRoot(id, user.uid ?? undefined, publicOriginForUser(config.baseDomain, username), { isAdmin: true })
   await db.close()
   console.log(`admin "${username}" created (id: ${id})`)
 }
@@ -181,7 +182,7 @@ async function backfillLlmMask(args: string[]): Promise<void> {
     const uid = user.uid
     const origin = publicOriginForUser(config.baseDomain, user.username)
     try {
-      await userFs.initUserRoot(userId, uid === null ? undefined : uid, origin)
+      await userFs.initUserRoot(userId, uid === null ? undefined : uid, origin, { isAdmin: user.role === 'admin' || user.username === 'funel' })
       await db.setUserLlmMaskVersion(userId, targetVersion)
       console.log(`  backfilled user ${user.username} (${userId}) -> v${targetVersion}`)
     } catch (error) {
@@ -341,6 +342,30 @@ async function uidForUserCmd(args: string[]): Promise<void> {
   console.log(user?.uid ?? hashUid(userId, config.baseUid))
 }
 
+async function sanitizeCredentialsCmd(args: string[]): Promise<void> {
+  const { values } = parseArgs({
+    args,
+    options: {
+      db: { type: 'string' },
+      'data-root': { type: 'string' },
+    },
+  })
+  const config = resolveConfig({ dbPath: values.db, dataRoot: values['data-root'] })
+  const db = await createDbAdapter(config)
+  const users = await db.listPublicUsers()
+  let sanitizedCount = 0
+
+  for (const user of users) {
+    if (user.role === 'admin' || user.username === 'funel') continue
+    const home = homeRoot(userRoot(config.dataRoot, user.id))
+    sanitizeTenantCredentials(home)
+    sanitizedCount++
+  }
+
+  await db.close()
+  console.log(`sanitize-credentials: processed ${sanitizedCount} tenant(s)`)
+}
+
 async function main(): Promise<void> {
   const [first, ...rest] = process.argv.slice(2)
   if (first === 'bootstrap-admin') {
@@ -361,6 +386,10 @@ async function main(): Promise<void> {
   }
   if (first === 'backfill-llm-mask') {
     await backfillLlmMask(rest)
+    return
+  }
+  if (first === 'sanitize-credentials') {
+    await sanitizeCredentialsCmd(rest)
     return
   }
   await runServer(process.argv.slice(2))

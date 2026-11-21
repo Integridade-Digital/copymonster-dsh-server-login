@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, utimesSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { MasterCredentialsResolver, redactApiKey } from '../lib/supervisor/master-credentials.js'
+import { MasterCredentialsResolver, redactApiKey, redactSensitiveString, redactSensitiveObject } from '../lib/supervisor/master-credentials.js'
 
 test('master credentials: redactApiKey redacts safely', () => {
   assert.equal(redactApiKey(null), '[NOT_SET]')
@@ -116,4 +116,32 @@ test('master credentials: cache invalidation on file mtime update', async (t) =>
 
   const key2 = await resolver.resolveKeyForProvider('openrouter')
   assert.equal(key2, 'updated-key')
+})
+
+test('master credentials: redactApiKey masks sensitive prefixes strictly', () => {
+  assert.equal(redactApiKey('sk-or-v1-abcdef1234567890'), '[REDACTED_KEY]')
+  assert.equal(redactApiKey('sk-ant-api03-secret123456'), '[REDACTED_KEY]')
+  assert.equal(redactApiKey('sk-proj-super-secret-key-1'), '[REDACTED_KEY]')
+  assert.equal(redactApiKey('dsk-0123456789abcdef0123'), '[REDACTED_KEY]')
+})
+
+test('master credentials: redactSensitiveString and redactSensitiveObject mask all logger messages', () => {
+  const logMsg = 'Error occurred with upstream key sk-or-v1-abcdef1234567890 and fallback dsk-0123456789abcdef'
+  assert.equal(
+    redactSensitiveString(logMsg),
+    'Error occurred with upstream key [REDACTED_KEY] and fallback [REDACTED_KEY]'
+  )
+
+  const logObj = {
+    msg: 'Calling openrouter with sk-proj-12345',
+    headers: {
+      Authorization: 'Bearer sk-ant-api03-99999',
+    },
+    count: 42,
+  }
+
+  const sanitized = redactSensitiveObject(logObj)
+  assert.equal(sanitized.msg, 'Calling openrouter with [REDACTED_KEY]')
+  assert.equal(sanitized.headers.Authorization, 'Bearer [REDACTED_KEY]')
+  assert.equal(sanitized.count, 42)
 })

@@ -63,7 +63,7 @@ export interface UserFs {
    * `home/` (directories are created by the root control plane).
    * `publicOrigin` (when provided) pins deployment-scoped profile entries —
    * today the Zernio plugin's trusted origin — to this tenant's own origin. */
-  initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void>
+  initUserRoot(userId: string, uid?: number, publicOrigin?: string, options?: { isAdmin?: boolean }): Promise<void>
   /** Absolute path of `relPath` **as the user's DSH process sees it** (pure path
    * math — the in-Pod mount path under k8s, the host path under local). */
   resolvePath(userId: string, relPath: string): string

@@ -32,6 +32,34 @@ interface CacheEntry {
   fileMtimeMs?: number
 }
 
+/** Sensitive API key patterns that must be redacted unconditionally across all loggers. */
+export const SENSITIVE_KEY_PATTERN = /(?:sk-or-v1-[a-zA-Z0-9_\-]+|sk-ant-[a-zA-Z0-9_\-]+|sk-proj-[a-zA-Z0-9_\-]+|dsk-[a-zA-Z0-9_\-]+)/gi
+
+/**
+ * Replace any sensitive API keys (sk-or-v1-, sk-ant-, sk-proj-, dsk-) with [REDACTED_KEY].
+ */
+export function redactSensitiveString(text: string): string {
+  if (!text || typeof text !== 'string') return text
+  return text.replace(SENSITIVE_KEY_PATTERN, '[REDACTED_KEY]')
+}
+
+/**
+ * Recursively sanitize objects/strings by masking sensitive API keys.
+ */
+export function redactSensitiveObject<T>(val: T): T {
+  if (typeof val === 'string') {
+    return redactSensitiveString(val) as unknown as T
+  }
+  if (val && typeof val === 'object' && !(val instanceof Error)) {
+    const res: any = Array.isArray(val) ? [] : {}
+    for (const [k, v] of Object.entries(val)) {
+      res[k] = redactSensitiveObject(v)
+    }
+    return res as T
+  }
+  return val
+}
+
 /**
  * Safely redact an API key for logs without leaking secret material.
  */
@@ -39,6 +67,9 @@ export function redactApiKey(key: string | undefined | null): string {
   if (!key) return '[NOT_SET]'
   const trimmed = key.trim()
   if (trimmed.length <= 10) return '[REDACTED]'
+  if (/^(sk-or-v1-|sk-ant-|sk-proj-|dsk-)/i.test(trimmed)) {
+    return '[REDACTED_KEY]'
+  }
   return `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}`
 }
 

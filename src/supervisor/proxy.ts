@@ -384,7 +384,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
           const user = await app.db.findUserBySlug(slug)
           if (user) {
             const uid = user.uid ?? hashUid(user.id, app.config.baseUid)
-            await app.userFs.initUserRoot(user.id, uid, publicOriginForUser(app.config.baseDomain, user.username))
+            await app.userFs.initUserRoot(user.id, uid, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === 'funel' })
             const folderAbs = app.userFs.resolvePath(user.id, '')
             void app.supervisor.launch(
               user.id,

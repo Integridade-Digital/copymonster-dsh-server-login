@@ -28,7 +28,7 @@ import { desktopRoutes } from './routes/desktop.js'
 import { dshRoutes } from './routes/dsh.js'
 import { pluginRoutes } from './routes/plugins.js'
 import { domainRoutes } from './routes/domain.js'
-import { MasterCredentialsResolver } from '../supervisor/master-credentials.js'
+import { MasterCredentialsResolver, redactSensitiveObject } from '../supervisor/master-credentials.js'
 import { LlmLoopbackServer } from '../gateway/llm-loopback-server.js'
 
 declare module 'fastify' {
@@ -115,7 +115,14 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   const userFs = createUserFs(config, (userId) => supervisor.ensureFileService(userId))
 
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: {
+      level: config.logLevel,
+      formatters: {
+        log(object) {
+          return redactSensitiveObject(object)
+        },
+      },
+    },
     // Only the edge in front of this process may set `X-Forwarded-For`.
     // `true` would make every client able to choose its own rate-limit and
     // audit address, so the trusted peers are named explicitly and are the

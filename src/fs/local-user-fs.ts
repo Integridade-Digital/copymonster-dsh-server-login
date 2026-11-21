@@ -112,13 +112,7 @@ function appendYamlBlock(raw: string, block: string): string {
 /** Shared workspace sandbox the tenant DSH writes under, unless configured. */
 const DEFAULT_COPYMONSTER_DATA_DIR = '/var/copymonster/data'
 
-/**
- * Credential store the platform operator configures once, read at provisioning
- * so every tenant reaches the same provider. The file holds `refs` (plaintext
- * `NAME: value` pairs the harness resolves `apiKeyEnv` from) and `records`
- * (per-tenant grants) — only `refs` are shared.
- */
-const DEFAULT_GLOBAL_CREDENTIALS = '/root/.dsh/.credentials.yaml'
+
 
 /** One route the model-mask resolves the virtual alias to. */
 interface TenantModelRoute {
@@ -259,52 +253,70 @@ interface CredentialStore {
 }
 
 /**
- * Merge the operator's provider credentials into one tenant's store.
+ * Known platform LLM provider keys that belong strictly in admin/control plane.
+ */
+export const PLATFORM_CREDENTIAL_KEYS = new Set([
+  'OPENROUTER_API_KEY',
+  'DEEPSEEK_API_KEY',
+  'OPENAI_API_KEY',
+  'ANTHROPIC_API_KEY',
+])
+
+/**
+ * Sanitize a tenant's credentials store.
+ * Ensures that regular tenants never store or inherit platform master API keys
+ * in their home `.credentials.yaml`.
  *
- * The operator's `refs` win: the Models surface is admin-only, so a tenant
- * cannot choose a provider, and a stale per-tenant key would silently override
- * the one the admin configured. The tenant's own `records` are preserved.
+ * If the tenant store contains platform references (e.g. OpenRouter, DeepSeek,
+ * OpenAI, Anthropic) or keys with sensitive provider prefixes (sk-or-v1-, sk-ant-,
+ * sk-proj-, dsk-, sk-), they are purged.
+ *
  * @param home - the tenant's DSH home directory.
  */
-function seedGlobalCredentials(home: string): void {
-  const source = process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS ?? DEFAULT_GLOBAL_CREDENTIALS
-  if (!existsSync(source)) return
+export function sanitizeTenantCredentials(home: string): void {
+  const target = join(home, '.credentials.yaml')
+  if (!existsSync(target)) return
 
-  let shared: CredentialStore
+  let tenant: CredentialStore
   try {
-    const parsed: unknown = loadYaml(readFileSync(source, 'utf8'))
+    const parsed: unknown = loadYaml(readFileSync(target, 'utf8'))
     if (parsed === null || typeof parsed !== 'object') return
-    shared = parsed as CredentialStore
+    tenant = parsed as CredentialStore
   } catch (error) {
-    warnProvisioning('read global credentials', source, error)
+    warnProvisioning('read tenant credentials for sanitization', target, error)
     return
   }
 
-  const refs = shared.refs
-  if (refs === undefined || typeof refs !== 'object') return
+  if (!tenant.refs || typeof tenant.refs !== 'object') return
 
-  const target = join(home, '.credentials.yaml')
-  let tenant: CredentialStore = {}
-  if (existsSync(target)) {
-    try {
-      const parsed: unknown = loadYaml(readFileSync(target, 'utf8'))
-      if (parsed !== null && typeof parsed === 'object') tenant = parsed as CredentialStore
-    } catch (error) {
-      warnProvisioning('read tenant credentials', target, error)
-      return
+  const SENSITIVE_KEY_PREFIX = /^(sk-or-v1-|sk-ant-|sk-proj-|dsk-|sk-)/i
+  let modified = false
+  const sanitizedRefs: Record<string, string> = {}
+
+  for (const [k, v] of Object.entries(tenant.refs)) {
+    const normKey = k.trim().toUpperCase()
+    const strVal = typeof v === 'string' ? v.trim() : ''
+
+    if (PLATFORM_CREDENTIAL_KEYS.has(normKey) || SENSITIVE_KEY_PREFIX.test(strVal)) {
+      modified = true
+      continue
     }
+
+    sanitizedRefs[k] = v
   }
 
-  const merged: CredentialStore = {
-    version: tenant.version ?? shared.version ?? 1,
-    refs: { ...(tenant.refs ?? {}), ...refs },
+  if (!modified) return
+
+  const sanitized: CredentialStore = {
+    version: tenant.version ?? 1,
+    refs: sanitizedRefs,
     ...(tenant.records === undefined ? {} : { records: tenant.records }),
   }
 
   try {
-    writeFileSync(target, dumpYaml(merged, { lineWidth: 120 }), { mode: 0o600 })
+    writeFileSync(target, dumpYaml(sanitized, { lineWidth: 120 }), { mode: 0o600 })
   } catch (error) {
-    warnProvisioning('write tenant credentials', target, error)
+    warnProvisioning('write sanitized tenant credentials', target, error)
   }
 }
 
@@ -666,7 +678,7 @@ export class LocalUserFs implements UserFs {
    * @param publicOrigin - browser-facing origin of this tenant; when set, every
    *   MCP bundle's profile row pins it.
    */
-  async initUserRoot(userId: string, uid?: number, publicOrigin?: string): Promise<void> {
+  async initUserRoot(userId: string, uid?: number, publicOrigin?: string, options?: { isAdmin?: boolean }): Promise<void> {
     const platformRouting = await this.loadRouting?.()
     const root = this.rootFor(userId)
     ensureDir(homeRoot(root))
@@ -779,8 +791,14 @@ export class LocalUserFs implements UserFs {
     ensureModelMaskEntry(cordisPatchPath, platformRouting ?? tenantRoutingPolicy(templateProfile), platformRouting !== undefined)
     ensureAgentDefaultModel(cordisPatchPath)
 
-    // The operator configures the provider once; every tenant consumes it.
-    seedGlobalCredentials(homeRoot(root))
+    // Under the Central Loopback Gateway architecture, tenants infer via
+    // 127.0.0.1:4010 with ephemeral internal session tokens. Master provider
+    // credentials are never seeded to tenant homes. Existing tenant stores are
+    // sanitized to purge any legacy master keys.
+    const isAdmin = options?.isAdmin === true
+    if (!isAdmin) {
+      sanitizeTenantCredentials(homeRoot(root))
+    }
 
     // The roots were created by the (possibly root) control plane; the DSH child
     // runs as the user's own uid and must be able to traverse + write them.
