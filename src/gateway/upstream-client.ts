@@ -1,4 +1,34 @@
 /**
+ * Sanitize error messages returned from upstream LLM providers so that
+ * no URLs, keys, provider names, or backend details are ever disclosed to tenants.
+ */
+export function sanitizeUpstreamErrorMessage(raw: string, status: number): string {
+  if (status === 429) {
+    return "Limite de requisições excedido temporariamente. Por favor, aguarde alguns instantes e tente novamente."
+  }
+  if (status === 401 || status === 403) {
+    return "Falha de autenticação com o modelo de inteligência artificial. Contate o administrador da plataforma."
+  }
+  if (status === 402) {
+    return "Cota de utilização do serviço de IA temporariamente indisponível. Contate o administrador."
+  }
+  if (status >= 500 && status <= 504) {
+    return "O serviço de IA está temporariamente indisponível. Tente novamente em instantes."
+  }
+  const lower = (raw || "").toLowerCase()
+  if (lower.includes("rate limit") || lower.includes("too many requests") || lower.includes("free-models")) {
+    return "Limite de requisições excedido temporariamente. Por favor, aguarde alguns instantes e tente novamente."
+  }
+  if (lower.includes("credit") || lower.includes("quota") || lower.includes("balance") || lower.includes("billing")) {
+    return "Cota de utilização do serviço de IA temporariamente indisponível. Contate o administrador."
+  }
+  if (lower.includes("api key") || lower.includes("auth") || lower.includes("unauthorized")) {
+    return "Falha de autenticação com o modelo de inteligência artificial. Contate o administrador da plataforma."
+  }
+  return "Ocorreu um erro temporário no processamento do modelo. Tente novamente."
+}
+
+/**
  * Upstream LLM dispatcher: forwards inference requests to external providers
  * with SSE streaming and pre-chunk failover.
  * @module dsh-server-login/gateway/upstream-client
@@ -252,7 +282,7 @@ export class UpstreamLlmClient {
         type: 'error',
         status: 502,
         error: {
-          message: `Failed to connect to LLM provider (${activeProvider}): no response received or key missing`,
+          message: 'Falha ao conectar com o serviço de inteligência artificial. Verifique a chave de API e tente novamente.',
           type: 'upstream_connection_error',
         },
       }
@@ -271,14 +301,17 @@ export class UpstreamLlmClient {
         }
       }
 
-      const errMsg = errBody?.error?.message || errBody?.message || `Upstream error ${activeRes.status}`
+      const rawErrMsg = errBody?.error?.message || errBody?.message || `Upstream error ${activeRes.status}`
+      const errMsg = sanitizeUpstreamErrorMessage(rawErrMsg, activeRes.status)
       return {
         type: 'error',
         status: activeRes.status,
         error: {
           message: errMsg,
-          type: errBody?.error?.type || 'upstream_error',
-          code: errBody?.error?.code,
+          // Never echo the provider's error type/code: providers sometimes
+          // include implementation names or internal routing details there.
+          type: 'upstream_error',
+          code: activeRes.status === 429 ? 'RATE_LIMIT' : (activeRes.status === 402 ? 'QUOTA' : (activeRes.status === 401 || activeRes.status === 403 ? 'AUTH' : undefined)),
         },
       }
     }

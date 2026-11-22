@@ -195,6 +195,43 @@ test('llm gateway: successfully dispatches non-streaming chat completion', async
   }
 })
 
+test('llm gateway: upstream failures never expose provider names, URLs, or raw diagnostics', async () => {
+  const oldFetch = globalThis.fetch
+  globalThis.fetch = async () => new Response(
+    JSON.stringify({ error: { message: 'OpenRouter insufficient balance at https://openrouter.ai/api/v1/chat/completions', type: 'openrouter_quota_error', code: 'provider_internal_code' } }),
+    { status: 402, headers: { 'Content-Type': 'application/json' } },
+  )
+  try {
+    const routing = {
+      version: 1,
+      updatedAt: new Date().toISOString(),
+      updatedBy: 'admin',
+      mask: { enabled: true, publicModelId: 'copy-monster-default', publicModelName: 'Model CopyMonster', applyToTenantsOnly: true },
+      routing: {
+        light: { provider: 'openrouter', model: 'openai/gpt-4o-mini', tasks: [] },
+        heavy: { provider: 'openrouter', model: 'openai/gpt-4o-mini', tasks: [] },
+      },
+      failover: { enabled: false, primary: { provider: 'openrouter', model: 'openai/gpt-4o-mini' }, chain: [] },
+    }
+    const { server } = createTestSetup({ routing, keys: { openrouter: 'sk-or-test' } })
+    const token = createTenantToken({ userId: 'user-1', slug: 'tenant-one', secret: SECRET })
+    const res = await server.getFastify().inject({
+      method: 'POST',
+      url: '/internal/v1/llm/chat/completions',
+      headers: { authorization: `Bearer ${token}` },
+      payload: { model: 'copymonster/copy-monster-default', messages: [{ role: 'user', content: 'oi' }] },
+    })
+    assert.equal(res.statusCode, 402)
+    const body = JSON.parse(res.body)
+    assert.equal(body.error.type, 'upstream_error')
+    assert.equal(body.error.code, 'QUOTA')
+    assert.match(body.error.message, /Cota de utilização/)
+    assert.doesNotMatch(res.body, /openrouter|https?:\/\/|provider_internal_code|insufficient balance/i)
+  } finally {
+    globalThis.fetch = oldFetch
+  }
+})
+
 test('llm gateway: transparent failover before first chunk on HTTP 402', async () => {
   const calls = []
   const oldFetch = globalThis.fetch
