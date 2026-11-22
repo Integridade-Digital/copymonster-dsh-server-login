@@ -26,9 +26,26 @@ function createTestSetup(overrides = {}) {
   }
 
   const routingStore = new CentralRoutingStore()
-  if (overrides.routing) {
-    routingStore.updateConfig(overrides.routing)
-  }
+  routingStore.updateConfig(overrides.routing || {
+    version: 1,
+    updatedAt: new Date().toISOString(),
+    updatedBy: 'admin',
+    mask: {
+      enabled: true,
+      publicModelId: 'copy-monster-default',
+      publicModelName: 'Model CopyMonster',
+      applyToTenantsOnly: true,
+    },
+    routing: {
+      light: { provider: 'deepseek', model: 'deepseek-chat', tasks: [] },
+      heavy: { provider: 'deepseek', model: 'deepseek-chat', tasks: [] },
+    },
+    failover: {
+      enabled: true,
+      primary: { provider: 'deepseek', model: 'deepseek-chat' },
+      chain: [],
+    },
+  })
 
   const credentialsResolver = new MasterCredentialsResolver({
     db: mockDb,
@@ -293,6 +310,108 @@ test('llm gateway: enforces rate limiting per tenant', async () => {
 
     assert.equal(blocked.statusCode, 429)
     assert.match(JSON.parse(blocked.body).error.message, /rate limit/i)
+  } finally {
+    globalThis.fetch = oldFetch
+  }
+})
+
+
+test('llm gateway: image generation rejects unauthenticated requests with 401', async () => {
+  const { server } = createTestSetup()
+  const res = await server.getFastify().inject({
+    method: 'POST',
+    url: '/internal/v1/images/generations',
+    payload: { prompt: 'A monster generating copy' },
+  })
+  assert.equal(res.statusCode, 401)
+})
+
+test('llm gateway: image generation rejects disabled tenant with 403', async () => {
+  const { server } = createTestSetup()
+  const token = createTenantToken({
+    userId: 'user-disabled',
+    slug: 'disabled-user',
+    secret: SECRET,
+  })
+  const res = await server.getFastify().inject({
+    method: 'POST',
+    url: '/internal/v1/images/generations',
+    headers: { authorization: `Bearer ${token}` },
+    payload: { prompt: 'A monster generating copy' },
+  })
+  assert.equal(res.statusCode, 403)
+})
+
+test('llm gateway: image generation returns 502 when no provider is configured', async () => {
+  const { server } = createTestSetup()
+  const token = createTenantToken({
+    userId: 'user-1',
+    slug: 'tenant-one',
+    secret: SECRET,
+  })
+  const res = await server.getFastify().inject({
+    method: 'POST',
+    url: '/internal/v1/images/generations',
+    headers: { authorization: `Bearer ${token}` },
+    payload: { prompt: 'A monster generating copy' },
+  })
+  assert.equal(res.statusCode, 502)
+  const body = JSON.parse(res.body)
+  assert.match(body.error.message, /No image generation provider configured/i)
+})
+
+test('llm gateway: image generation successfully dispatches to Cloudflare Workers AI', async () => {
+  const oldFetch = globalThis.fetch
+  let capturedUrl = ''
+  let capturedHeaders = {}
+  let capturedBody = null
+
+  globalThis.fetch = async (url, options) => {
+    capturedUrl = String(url)
+    capturedHeaders = options.headers
+    capturedBody = JSON.parse(options.body)
+
+    const fakePng = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+    return new Response(fakePng, {
+      status: 200,
+      headers: { 'Content-Type': 'image/png' },
+    })
+  }
+
+  try {
+    const { server, credentialsResolver } = createTestSetup()
+    credentialsResolver.resolveCloudflareCredentials = async () => ({
+      accountId: 'cf-test-account-123',
+      apiKey: 'cf-test-api-token-456',
+    })
+
+    const token = createTenantToken({
+      userId: 'user-1',
+      slug: 'tenant-one',
+      secret: SECRET,
+    })
+
+    const res = await server.getFastify().inject({
+      method: 'POST',
+      url: '/internal/v1/images/generations',
+      headers: { authorization: `Bearer ${token}` },
+      payload: {
+        prompt: 'A futuristic landing page banner with a friendly monster mascot',
+      },
+    })
+
+    assert.equal(res.statusCode, 200)
+    const body = JSON.parse(res.body)
+    assert.ok(body.created)
+    assert.equal(body.data.length, 1)
+    assert.equal(body.data[0].mime_type, 'image/png')
+    assert.ok(body.data[0].b64_json.length > 0)
+
+    // Verify upstream call parameters
+    assert.match(capturedUrl, /api\.cloudflare\.com\/client\/v4\/accounts\/cf-test-account-123\/ai\/run\/@cf\/black-forest-labs\/flux-1-schnell/)
+    assert.equal(capturedHeaders['Authorization'], 'Bearer cf-test-api-token-456')
+    assert.equal(capturedBody.prompt, 'A futuristic landing page banner with a friendly monster mascot')
+    assert.equal(capturedBody.num_steps, 4)
   } finally {
     globalThis.fetch = oldFetch
   }

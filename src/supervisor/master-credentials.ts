@@ -272,11 +272,27 @@ export class MasterCredentialsResolver {
     if (normalized === 'anthropic') {
       return creds['ANTHROPIC_API_KEY']
     }
+    if (normalized === 'cloudflare' || normalized === 'cloudflare-workers-ai' || normalized === 'workers-ai') {
+      return creds['CLOUDFLARE_API_KEY'] || creds['CLOUDFLARE_API_TOKEN']
+    }
 
     // 3. Fallback to UPPERCASE_API_KEY convention
     const envStyle = `${normalized.toUpperCase().replace(/[^A-Z0-9]/g, '_')}_API_KEY`
     if (creds[envStyle]) return creds[envStyle]
 
     return undefined
+  }
+
+  /**
+   * Resolve Cloudflare Workers AI credentials (Account ID and API Key/Token).
+   */
+  public async resolveCloudflareCredentials(): Promise<{ accountId?: string; apiKey?: string }> {
+    const creds = await this.getAllCredentials()
+    const apiKey = creds['CLOUDFLARE_API_KEY'] || creds['CLOUDFLARE_API_TOKEN'] || creds['cloudflare'] || process.env.CLOUDFLARE_API_KEY || process.env.CLOUDFLARE_API_TOKEN
+    const accountId = creds['CLOUDFLARE_ACCOUNT_ID'] || creds['CLOUDFLARE_ACCOUNT'] || process.env.CLOUDFLARE_ACCOUNT_ID || process.env.CLOUDFLARE_ACCOUNT
+    return {
+      accountId: accountId?.trim() || undefined,
+      apiKey: apiKey?.trim() || undefined,
+    }
   }
 }

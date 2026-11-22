@@ -35,5 +35,11 @@ export function platformApiKeys(env: NodeJS.ProcessEnv): Record<string, string> 
   const openai = env.OPENAI_API_KEY?.trim()
   if (openai) keys.OPENAI_API_KEY = openai
 
+  const cfKey = (env.CLOUDFLARE_API_KEY ?? env.CLOUDFLARE_API_TOKEN)?.trim()
+  if (cfKey) keys.CLOUDFLARE_API_KEY = cfKey
+
+  const cfAccount = (env.CLOUDFLARE_ACCOUNT_ID ?? env.CLOUDFLARE_ACCOUNT)?.trim()
+  if (cfAccount) keys.CLOUDFLARE_ACCOUNT_ID = cfAccount
+
   return keys
 }
