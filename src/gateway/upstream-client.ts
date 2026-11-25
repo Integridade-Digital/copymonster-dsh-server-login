@@ -197,12 +197,17 @@ export class UpstreamLlmClient {
     const fallbackCandidate = cfg.failover?.chain?.[0]
     const hasFailover = cfg.failover?.enabled !== false && fallbackCandidate !== undefined
 
-    // Helper to attempt a single upstream call
+    // Helper to attempt a single upstream call.
+    //
+    // The timeout covers the wait up to response headers only. For a streaming
+    // body the timer is released as soon as the stream is handed to the caller,
+    // because a 60 s wall-clock deadline would otherwise abort long SSE
+    // generations mid-stream. The returned `releaseTimeout` is that hook.
     const tryCall = async (
       provider: string,
       model: string,
       key: string,
-    ): Promise<{ res?: Response; error?: Error }> => {
+    ): Promise<{ res?: Response; error?: Error; releaseTimeout?: () => void }> => {
       const { url, headers } = await this.buildProviderEndpoint(provider, key)
       const payload = {
         ...body,
@@ -213,20 +218,24 @@ export class UpstreamLlmClient {
         `[LLM-GATEWAY] Dispatching to ${provider} (${model}) with key ${redactApiKey(key)} for tenant ${options?.tenantSlug ?? 'unknown'}`,
       )
 
-      try {
-        const timeoutSignal = AbortSignal.timeout(60_000)
-        const combinedSignal = options?.signal
-          ? AbortSignal.any([options.signal, timeoutSignal])
-          : timeoutSignal
+      const timeoutController = new AbortController()
+      const timer = setTimeout(() => timeoutController.abort(new Error('upstream headers timeout')), 60_000)
+      timer.unref()
+      const signal = options?.signal
+        ? AbortSignal.any([options.signal, timeoutController.signal])
+        : timeoutController.signal
+      const releaseTimeout = (): void => clearTimeout(timer)
 
+      try {
         const res = await fetch(url, {
           method: 'POST',
           headers,
           body: JSON.stringify(payload),
-          signal: combinedSignal,
+          signal,
         })
-        return { res }
+        return { res, releaseTimeout }
       } catch (err) {
+        releaseTimeout()
         return { error: err instanceof Error ? err : new Error(String(err)) }
       }
     }
@@ -235,11 +244,15 @@ export class UpstreamLlmClient {
     let activeRes: Response | undefined
     let activeProvider = primaryTarget.provider
     let activeModel = primaryTarget.model
+    // Release of the winning attempt's header timeout; streaming bodies keep
+    // it alive until the stream is handed off (see `tryCall`).
+    let releaseActiveTimeout: (() => void) | undefined
 
     if (primaryKey) {
       const primaryAttempt = await tryCall(primaryTarget.provider, primaryTarget.model, primaryKey)
       if (primaryAttempt.res) {
         activeRes = primaryAttempt.res
+        releaseActiveTimeout = primaryAttempt.releaseTimeout
       } else {
         this.logger?.warn?.(
           `[LLM-GATEWAY] Primary call to ${primaryTarget.provider} failed with network error: ${primaryAttempt.error?.message}`,
@@ -267,11 +280,16 @@ export class UpstreamLlmClient {
 
         const fallbackAttempt = await tryCall(fallbackProvider, fallbackModel, fallbackKey)
         if (fallbackAttempt.res && fallbackAttempt.res.ok) {
+          releaseActiveTimeout?.()
           activeRes = fallbackAttempt.res
+          releaseActiveTimeout = fallbackAttempt.releaseTimeout
           activeProvider = fallbackProvider
           activeModel = fallbackModel
         } else if (fallbackAttempt.res && !activeRes) {
           activeRes = fallbackAttempt.res
+          releaseActiveTimeout = fallbackAttempt.releaseTimeout
+        } else {
+          fallbackAttempt.releaseTimeout?.()
         }
       }
     }
@@ -300,6 +318,7 @@ export class UpstreamLlmClient {
           errBody = { message: `Upstream provider error (HTTP ${activeRes.status})` }
         }
       }
+      releaseActiveTimeout?.()
 
       const rawErrMsg = errBody?.error?.message || errBody?.message || `Upstream error ${activeRes.status}`
       const errMsg = sanitizeUpstreamErrorMessage(rawErrMsg, activeRes.status)
@@ -318,6 +337,9 @@ export class UpstreamLlmClient {
 
     // 4. Handle successful response
     if (isStream) {
+      // The header timeout has done its job once the response is streaming;
+      // leaving it armed would abort a long generation at 60 s of wall-clock.
+      releaseActiveTimeout?.()
       if (!activeRes.body) {
         return {
           type: 'error',
@@ -347,12 +369,14 @@ export class UpstreamLlmClient {
     // Non-streaming JSON response
     try {
       const data = await activeRes.json()
+      releaseActiveTimeout?.()
       return {
         type: 'json',
         status: activeRes.status,
         data,
       }
     } catch (err) {
+      releaseActiveTimeout?.()
       return {
         type: 'error',
         status: 502,
