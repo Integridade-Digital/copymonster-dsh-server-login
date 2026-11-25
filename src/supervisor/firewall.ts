@@ -30,10 +30,12 @@ function resolveIptables(): string {
 
 /** One guarded loopback port with idempotent install/remove. */
 export interface PortGuard {
-  /** Add the OUTPUT owner-match REJECT rule (throws on failure). */
+  /** Ensure the OUTPUT owner-match REJECT rule exists (throws on failure). */
   install(port: number): void
   /** Remove the rule best-effort (a missing rule is not an error). */
   remove(port: number): void
+  /** Remove every owner-match REJECT rule this module installed, on any port. */
+  reset(): void
 }
 
 /** iptables arguments (excluding the executable) for one insert/delete.
@@ -50,6 +52,13 @@ function canGuard(): boolean {
   return process.platform === 'linux' && typeof process.getuid === 'function' && process.getuid() === 0
 }
 
+/** Loopback port named by an OUTPUT owner-guard rule spec, if any. */
+function guardRulePort(spec: string): number | undefined {
+  if (!spec.includes('-m owner') || !spec.includes('! --uid-owner 0')) return undefined
+  const match = /--dport (\d+)/.exec(spec)
+  return match?.[1] === undefined ? undefined : Number(match[1])
+}
+
 /**
  * Create the port guard when enabled, or undefined. Fails loud when enabled on
  * a host that cannot apply it (non-Linux or non-root): a silently absent guard
@@ -63,9 +72,31 @@ export function createPortGuard(enabled: boolean): PortGuard | undefined {
   }
   const guarded = new Set<number>()
   const iptablesBin = resolveIptables()
+
+  const removePort = (port: number): void => {
+    // A port can carry more than one rule after past restarts; drop each copy
+    // until none remain.
+    const check = ruleArgs(port, '-D')
+    check[2] = '-C'
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      try {
+        execFileSync(iptablesBin, check, { stdio: 'ignore' })
+      } catch {
+        return
+      }
+      try {
+        execFileSync(iptablesBin, ruleArgs(port, '-D'), { stdio: 'ignore' })
+      } catch {
+        return
+      }
+    }
+  }
+
   return {
     install(port) {
       if (guarded.has(port)) return
+      // Drop any earlier copies so restarts do not stack rules on one port.
+      removePort(port)
       // Insert at position 1 so an earlier ACCEPT (ufw / conntrack) can't
       // swallow the packet before the REJECT is evaluated.
       execFileSync(iptablesBin, ruleArgs(port, '-I'))
@@ -74,13 +105,23 @@ export function createPortGuard(enabled: boolean): PortGuard | undefined {
     remove(port) {
       if (!guarded.has(port)) return
       try {
-        execFileSync(iptablesBin, ruleArgs(port, '-D'))
-      } catch {
-        // Best-effort teardown: a stale rule leaves the port closed to
-        // co-tenants, which is fail-safe, and a dropped rule is already gone.
+        removePort(port)
       } finally {
         guarded.delete(port)
       }
+    },
+    reset() {
+      let specs: string[]
+      try {
+        specs = execFileSync(iptablesBin, ['-t', 'filter', '-S', 'OUTPUT'], { encoding: 'utf8' }).split('\n')
+      } catch {
+        return
+      }
+      for (const spec of specs) {
+        const port = guardRulePort(spec)
+        if (port !== undefined) removePort(port)
+      }
+      guarded.clear()
     },
   }
 }

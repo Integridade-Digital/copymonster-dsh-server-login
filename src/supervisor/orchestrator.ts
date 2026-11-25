@@ -131,6 +131,17 @@ export class LocalSpawner implements Spawner {
     private readonly db: { findUserById(id: string): Promise<User | undefined> },
   ) {
     this.portGuard = createPortGuard(config.portGuard)
+    // Rules survive a restart in kernel state while this process's `guarded`
+    // set does not, so clear stale copies before installing the current set.
+    this.portGuard?.reset()
+    // Tenant processes run as their own uid. Without guarding the control plane,
+    // a tenant with a shell could reach the orchestrator (3081) and the LLM
+    // gateway (4010) directly, bypassing session auth and per-tenant metering.
+    if (this.portGuard !== undefined) {
+      for (const port of new Set([config.port, config.llmGatewayPort])) {
+        this.portGuard.install(port)
+      }
+    }
     // In-memory state does not survive a restart, so scopes started by the
     // previous process are orphans that would collide with the next launch.
     this.reapOrphanScopes()
@@ -519,10 +530,12 @@ export class LocalSpawner implements Spawner {
     const slug = user?.username ?? userId
     const isMaster = user?.username === this.config.masterTenantUsername || user?.role === 'admin'
 
-    const gatewaySecret =
-      this.config.gatewayInternalSecret && this.config.gatewayInternalSecret.length >= 16
-        ? this.config.gatewayInternalSecret
-        : 'copymonster-default-fallback-gateway-secret-32-chars'
+    // A short or absent secret would let a tenant forge gateway session tokens,
+    // so fail the spawn instead of falling back to a value in the source tree.
+    const gatewaySecret = this.config.gatewayInternalSecret
+    if (typeof gatewaySecret !== 'string' || gatewaySecret.length < 32) {
+      throw new Error('gatewayInternalSecret must be at least 32 characters; set GATEWAY_INTERNAL_SECRET or SESSION_SECRET')
+    }
 
     const sessionToken = createTenantToken({
       userId,
