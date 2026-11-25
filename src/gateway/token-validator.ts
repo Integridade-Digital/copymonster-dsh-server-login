@@ -33,9 +33,15 @@ export type VerifyTokenResult =
 
 /**
  * Mint a signed internal session token for a tenant process.
+ *
+ * The orchestrator re-mints the token on every spawn, so a short lifetime
+ * bounds the window a leaked token stays useful without forcing mid-stream
+ * reauthentication; 12 h clears any realistic single generation.
+ * @param options - tenant identity, signing secret, and optional TTL override.
+ * @returns the signed compact JWS.
  */
 export function createTenantToken(options: CreateTenantTokenOptions): string {
-  const { userId, slug, secret, ttlSeconds = 86400 } = options
+  const { userId, slug, secret, ttlSeconds = 12 * 60 * 60 } = options
   if (!secret || secret.length < 16) {
     throw new Error('createTenantToken: secret must be at least 16 characters')
   }

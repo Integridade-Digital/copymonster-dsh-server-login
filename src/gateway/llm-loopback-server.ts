@@ -31,6 +31,9 @@ interface RateLimitBucket {
 
 const DEFAULT_RATE_LIMIT_PER_MINUTE = 60
 
+/** Bucket-map size that triggers an expired-bucket sweep. */
+const RATE_LIMIT_SWEEP_THRESHOLD = 1024
+
 export class LlmLoopbackServer {
   private readonly app: FastifyInstance
   private readonly config: ServerConfig
@@ -65,6 +68,23 @@ export class LlmLoopbackServer {
 
   public getFastify(): FastifyInstance {
     return this.app
+  }
+
+  /**
+   * Drop rate-limit buckets whose window has closed.
+   *
+   * One bucket per tenant is created on demand and never removed otherwise, so
+   * the map would grow for every tenant id the token validator has seen. A
+   * sweep runs only once the map grows past a small bound, keeping the common
+   * case O(1).
+   * @param buckets - the per-endpoint bucket map to prune.
+   * @param now - current epoch milliseconds.
+   */
+  private sweepRateLimits(buckets: Map<string, RateLimitBucket>, now: number): void {
+    if (buckets.size < RATE_LIMIT_SWEEP_THRESHOLD) return
+    for (const [key, bucket] of buckets) {
+      if (now >= bucket.resetAt) buckets.delete(key)
+    }
   }
 
   private registerRoutes(): void {
@@ -132,6 +152,7 @@ export class LlmLoopbackServer {
 
       // 3. Sliding window Rate Limiter
       const now = Date.now()
+      this.sweepRateLimits(this.rateLimits, now)
       let bucket = this.rateLimits.get(userId)
       if (!bucket || now >= bucket.resetAt) {
         bucket = { count: 1, resetAt: now + 60_000 }
@@ -260,6 +281,7 @@ export class LlmLoopbackServer {
 
       // 3. Sliding window Rate Limiter for Images (30/min)
       const now = Date.now()
+      this.sweepRateLimits(this.imageRateLimits, now)
       let bucket = this.imageRateLimits.get(userId)
       if (!bucket || now >= bucket.resetAt) {
         bucket = { count: 1, resetAt: now + 60_000 }

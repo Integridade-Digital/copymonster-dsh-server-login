@@ -97,15 +97,15 @@ export function grantUserSandboxPermissions(dataRoot: string, userId: string, ui
 }
 
 /**
- * Hand a user root to the tenant's own uid. The recursive pass makes the tree
- * traversable and writable by that uid, so it widens group/other bits too;
- * owner-only files are restored afterwards.
+ * Hand a user root to the tenant's own uid. Everything under the root becomes
+ * readable only by that uid: co-tenants and other local users cannot read
+ * another tenant's workspace, sessions, or files.
  * @param root - the user root directory.
  * @param uid - the tenant's Linux uid (also used as gid).
  */
 export function grantUserRootPermissions(root: string, uid: number): void {
   execFileSync('chown', ['-R', `${uid}:${uid}`, root], { stdio: 'ignore' })
-  execFileSync('chmod', ['-R', 'u+rwX,go+rX', root], { stdio: 'ignore' })
+  execFileSync('chmod', ['-R', 'u+rwX,go-rwx', root], { stdio: 'ignore' })
   for (const name of OWNER_ONLY_FILES) {
     const target = join(homeRoot(root), name)
     try {
