@@ -27,6 +27,15 @@ import { startTcpBridge } from './tcp-bridge.js'
 import { buildServer } from './web/server.js'
 import { DEFAULT_CENTRAL_ROUTING_CONFIG } from './config/llm-central-routing.js'
 
+/**
+ * Ceiling on the shutdown drain before the process exits on its own.
+ *
+ * Stays comfortably under systemd's 90 s stop timeout so a stuck socket is
+ * reported as a logged warning and a clean exit instead of a SIGKILL.
+ */
+const SHUTDOWN_TIME_BUDGET_MS = 45_000
+
+
 const HELP = `dsh-server-login — DSH server login orchestrator
 
 Usage:
@@ -246,7 +255,17 @@ async function runServer(args: string[]): Promise<void> {
   const shutdown = async (signal: string): Promise<void> => {
     app.log.info(`received ${signal}, shutting down`)
     controller?.stop()
+    // Bound the drain so a socket that never closes cannot push shutdown past
+    // systemd's stop timeout and turn into a SIGKILL. The teardown hook already
+    // stops tenants concurrently and destroys proxied WebSockets; this is the
+    // last-resort ceiling for anything else still open.
+    const ceiling = setTimeout(() => {
+      app.log.warn('shutdown exceeded time budget; forcing exit')
+      process.exit(0)
+    }, SHUTDOWN_TIME_BUDGET_MS)
+    ceiling.unref()
     await app.close()
+    clearTimeout(ceiling)
     process.exit(0)
   }
   process.on('SIGINT', () => void shutdown('SIGINT'))

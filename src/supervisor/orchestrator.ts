@@ -54,6 +54,16 @@ const WATCHDOG_TASK = 'Read DSH_SERVER_LOGIN_HANDOFF_PATH. If it contains a JSON
 const SCOPE_CGROUP_ROOT = '/sys/fs/cgroup/system.slice'
 
 /**
+ * Upper bound on a single tenant's stop during shutdown.
+ *
+ * `killInstance` signals both the cgroup and the child synchronously, so a
+ * tenant that has not settled by this point is treated as stopped; the orphan
+ * scope reap right after empties anything left. Bounding each tenant keeps the
+ * whole teardown inside systemd's stop timeout regardless of tenant count.
+ */
+const TEARDOWN_PER_TENANT_TIMEOUT_MS = 8_000
+
+/**
  * Stable prefix of every transient scope a tenant role owns.
  * @param userId - tenant the scope belongs to.
  * @param role - main or watchdog.
@@ -330,6 +340,25 @@ export class LocalSpawner implements Spawner {
     this.mains.delete(userId)
     this.watchdogs.delete(userId)
     this.touchActivity(userId)
+    this.closeTenantSockets(userId)
+  }
+
+  /**
+   * Destroy the proxied upstream sockets tracked for one tenant.
+   *
+   * An upgraded WebSocket is outside the Fastify request lifecycle, so it must
+   * be torn down explicitly; otherwise `app.close()` waits on it until the stop
+   * timeout.
+   */
+  private closeTenantSockets(userId: string): void {
+    const set = this.activeWsSockets.get(userId)
+    if (set === undefined) return
+    for (const socket of set) {
+      try {
+        socket.destroy?.()
+      } catch {}
+    }
+    set.clear()
     this.activeWsSockets.delete(userId)
   }
 
@@ -372,10 +401,58 @@ export class LocalSpawner implements Spawner {
     this.idleTimers.set(userId, timer)
   }
 
-  /** Stop every tracked process on shutdown. */
+  /**
+   * Stop every tracked process on shutdown.
+   *
+   * Tenants stop concurrently and each `stop` is bounded by
+   * {@link TEARDOWN_PER_TENANT_TIMEOUT_MS}, so teardown finishes in roughly one
+   * stop timeout instead of one per tenant. A serial loop made the total scale
+   * with the tenant count and pushed systemd's 90 s stop timeout, which then
+   * SIGKILLed the orchestrator mid-shutdown.
+   */
   async teardown(): Promise<void> {
-    for (const userId of [...this.mains.keys(), ...this.watchdogs.keys()]) await this.stop(userId)
+    const userIds = [...new Set([...this.mains.keys(), ...this.watchdogs.keys()])]
+    await Promise.all(
+      userIds.map((userId) =>
+        this.withTimeout(this.stop(userId), TEARDOWN_PER_TENANT_TIMEOUT_MS).catch(() => {}),
+      ),
+    )
+    this.closeActiveSockets()
     this.reapOrphanScopes()
+  }
+
+  /**
+   * Run `work`, resolving either when it settles or when `ms` elapses.
+   *
+   * Teardown must never hang on a tenant whose stop path stalls; a timed-out
+   * tenant is treated as stopped because {@link killInstance} already signalled
+   * the cgroup and the process, and the scope is reaped right after.
+   */
+  private withTimeout(work: Promise<void>, ms: number): Promise<void> {
+    return new Promise<void>((resolve) => {
+      const timer = setTimeout(resolve, ms)
+      timer.unref()
+      void work.then(
+        () => {
+          clearTimeout(timer)
+          resolve()
+        },
+        () => {
+          clearTimeout(timer)
+          resolve()
+        },
+      )
+    })
+  }
+
+  /**
+   * Tear down every proxied socket still open.
+   *
+   * `stop` already destroys each tenant's sockets; this sweep covers a tenant
+   * whose stop timed out before reaching that step.
+   */
+  private closeActiveSockets(): void {
+    for (const userId of [...this.activeWsSockets.keys()]) this.closeTenantSockets(userId)
   }
 
   /**
