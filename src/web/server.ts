@@ -169,6 +169,10 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
     logger: app.log,
   })
   await centralRoutingStore.loadOnBoot()
+  // M-6: a running gateway must adopt an Admin routing change. Realtime makes
+  // it immediate; the poll is the backstop when the publication is off.
+  centralRoutingStore.subscribeToChanges()
+  centralRoutingStore.startPolling()
   app.decorate('centralRoutingStore', centralRoutingStore)
 
   const masterCredentials = new MasterCredentialsResolver({
@@ -210,6 +214,8 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
   })
 
   app.addHook('onClose', async () => {
+    centralRoutingStore.stopPolling()
+    await centralRoutingStore.unsubscribe()
     if (llmGateway.isRunning()) {
       await llmGateway.stop()
     }

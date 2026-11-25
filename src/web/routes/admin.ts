@@ -12,6 +12,14 @@ export const adminRoutes: FastifyPluginAsync = async (app) => {
     users: await app.db.listPublicUsers(),
   }))
 
+  // M-6: the main app calls this after an Admin saves Settings > Models so a
+  // running gateway adopts the new provider without waiting for the poll. The
+  // read is idempotent, so a duplicate or missed call only shifts timing.
+  app.post('/api/admin/llm-routing/reload', { preHandler: requireAdmin }, async () => {
+    const config = await app.centralRoutingStore.triggerReload()
+    return { reloaded: true, version: config.version }
+  })
+
   app.post('/api/admin/users/:id/approve', { preHandler: requireAdmin }, async (request, reply) => {
     const { id } = request.params as { id: string }
     const user = await app.db.findUserById(id)
