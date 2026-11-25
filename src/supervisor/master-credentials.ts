@@ -39,7 +39,7 @@ interface CacheEntry {
 }
 
 /** Sensitive API key patterns that must be redacted unconditionally across all loggers. */
-export const SENSITIVE_KEY_PATTERN = /(?:sk-or-v1-[a-zA-Z0-9_\-]+|sk-ant-[a-zA-Z0-9_\-]+|sk-proj-[a-zA-Z0-9_\-]+|dsk-[a-zA-Z0-9_\-]+)/gi
+export const SENSITIVE_KEY_PATTERN = /(?:sk-or-v1-[a-zA-Z0-9_-]+|sk-ant-[a-zA-Z0-9_-]+|sk-proj-[a-zA-Z0-9_-]+|dsk-[a-zA-Z0-9_-]+|sk-[a-zA-Z0-9]{32,}|nvapi-[a-zA-Z0-9_-]{16,}|thk_live_[a-zA-Z0-9]+|apx_[a-zA-Z0-9]+|freellm[a-zA-Z0-9_-]*|eyJ[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,}\.[a-zA-Z0-9_-]{8,})/g
 
 /**
  * Replace any sensitive API keys (sk-or-v1-, sk-ant-, sk-proj-, dsk-) with [REDACTED_KEY].
@@ -106,7 +106,8 @@ export function redactApiKey(key: string | undefined | null): string {
   if (!key) return '[NOT_SET]'
   const trimmed = key.trim()
   if (trimmed.length <= 10) return '[REDACTED]'
-  if (/^(sk-or-v1-|sk-ant-|sk-proj-|dsk-)/i.test(trimmed)) {
+  SENSITIVE_KEY_PATTERN.lastIndex = 0
+  if (SENSITIVE_KEY_PATTERN.test(trimmed) || /^(sk-or-v1-|sk-ant-|sk-proj-|dsk-)/i.test(trimmed)) {
     return '[REDACTED_KEY]'
   }
   return `${trimmed.slice(0, 7)}...${trimmed.slice(-4)}`

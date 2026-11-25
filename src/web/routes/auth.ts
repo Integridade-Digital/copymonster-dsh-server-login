@@ -12,6 +12,7 @@ import { homeRoot, userRoot } from '../../fs/workspace.js'
 import { deriveKey, encrypt } from '../../crypto.js'
 import { toPublicUser, type User } from '../../db/types.js'
 import {
+  burnPasswordHashCost,
   clearSessionCookie,
   hashPassword,
   hashSessionToken,
@@ -273,7 +274,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           await app.db.setUserSupabaseSub(sub, sub)
           user.supabase_sub = sub
           try {
-            await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === 'funel' })
+            await app.userFs.initUserRoot(sub, user.uid ?? undefined, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === app.config.masterTenantUsername })
             // Create the Linux account and its home now, while the operator is
             // still on the login screen: a provisioning conflict then surfaces
             // as a clear error here instead of an endless launching page.
@@ -342,10 +343,21 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       }
 
       const user = await app.db.findUserByUsername(username)
-      if (user === undefined || !(await verifyPassword(password, user.pass_hash))) {
+      const rejectCredentials = (): void => {
         const { delayMs } = loginThrottle.recordFailure(username)
         if (delayMs > 0) reply.header('retry-after', Math.ceil(delayMs / 1000))
-        return reply.code(401).send({ error: 'invalid_credentials' })
+        reply.code(401).send({ error: 'invalid_credentials' })
+      }
+      if (user === undefined) {
+        // Equalize timing with the wrong-password path so a probe cannot tell
+        // an existing username from a missing one.
+        await burnPasswordHashCost(password)
+        rejectCredentials()
+        return
+      }
+      if (!(await verifyPassword(password, user.pass_hash))) {
+        rejectCredentials()
+        return
       }
       if (user.role === 'pending') return reply.code(403).send({ error: 'pending_review' })
       if (user.role === 'disabled') return reply.code(403).send({ error: 'disabled' })
