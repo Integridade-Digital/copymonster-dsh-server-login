@@ -22,6 +22,7 @@ import { K8sSpawner } from '../supervisor/k8s-spawner.js'
 import { createIdentitySigner, type IdentitySigner } from '../identity.js'
 import { registerDshProxy } from '../supervisor/proxy.js'
 import type { Spawner } from '../supervisor/spawner.js'
+import { csrfGuard } from './middleware/csrf.js'
 import { rateLimit } from './middleware/rate-limit.js'
 import { authRoutes } from './routes/auth.js'
 import { adminRoutes } from './routes/admin.js'
@@ -188,8 +189,13 @@ export async function buildServer(config: ServerConfig): Promise<FastifyInstance
 
   app.decorateRequest('user', null)
 
-  // Reverse proxy (subdomain + legacy subpath). Registered first so its global
-  // onRequest hook intercepts per-user subdomain traffic before other hooks.
+  // Mutating requests must prove a platform origin because the session cookie
+  // is SameSite=None across tenant subdomains. Registered before the proxy hook
+  // so mutations forwarded to a tenant DSH are covered too.
+  await csrfGuard(app)
+
+  // Reverse proxy (subdomain + legacy subpath). Registered before the route
+  // groups so its onRequest hook intercepts per-user subdomain traffic.
   await registerDshProxy(app)
 
   // Security headers for this process's own responses. The proxied tenant DSH

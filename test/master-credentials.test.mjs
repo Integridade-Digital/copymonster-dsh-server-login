@@ -59,7 +59,11 @@ refs:
 
 test('master credentials: falls back to environment variables', async () => {
   const oldEnv = process.env.OPENROUTER_API_KEY
+  const oldGlobal = process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS
   process.env.OPENROUTER_API_KEY = 'sk-or-env-fallback'
+  // The host may keep a real global vault at /root/.dsh/.credentials.yaml;
+  // point the resolver elsewhere so the environment layer is observable.
+  process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS = '/tmp/dsh-nonexistent-global-credentials.yaml'
 
   try {
     const mockDb = {
@@ -81,6 +85,8 @@ test('master credentials: falls back to environment variables', async () => {
     } else {
       delete process.env.OPENROUTER_API_KEY
     }
+    if (oldGlobal !== undefined) process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS = oldGlobal
+    else delete process.env.DSH_SERVER_LOGIN_GLOBAL_CREDENTIALS
   }
 })
 

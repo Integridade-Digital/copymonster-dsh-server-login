@@ -380,10 +380,12 @@ kubectl run pgbench-init --restart=Never --image=postgres:16 -n <ns> \
 - **输入校验（已确认安全）**：用户名 `^[a-zA-Z0-9_-]+$`、域名 `isValidDomain`
   （小写字母数字+连字符，防 nginx 注入）、密钥名 `^[A-Za-z0-9\-_ .]{1,32}$`、路径
   `resolveWithinRoot`/`safeFilename`。
-- **CSRF（残余低风险，未修）**：会话 cookie 为 `SameSite=None` 后跨站请求也会带
-  cookie，但所有状态变更端点都是 `application/json` + 无 CORS 头，跨站 fetch 会触发
-  preflight 被浏览器拦；真正暴露的是无 body 的 `POST /api/auth/logout`（logout CSRF，
-  低危）。后续若要加固，给状态变更端点加 CSRF token / 自定义头校验。
+- **CSRF（已加固）**：会话 cookie 为 `SameSite=None` 后跨站请求也会带 cookie，因此
+  所有 `POST`/`PUT`/`PATCH`/`DELETE` 在 `onRequest` 阶段校验 `Origin`（缺失时用
+  `Referer`）：必须匹配请求自身主机、平台域名或其子域、主应用，或本机回环。带 cookie
+  的请求只信任自身主机、平台裸域和主应用，避免一个租户子域替另一个租户发起变更；无
+  `Origin`/`Referer` 且带 cookie 的请求仅接受回环对端（服务端调用与本地冒烟），无
+  cookie 的登录/SSO 交换不受影响。
 - **OWASP ZAP 基线扫描**：未在本轮执行（需 ZAP 工具/容器）。已定位的 XSS 已人工修，
   ZAP 可作为 CI 门禁后续接入。
 

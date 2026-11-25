@@ -135,6 +135,7 @@ npm run smoke        # 及 smoke:* 系列：对运行中的服务做端到端冒
 ## 安全
 
 - **会话**：不透明随机 token，仅 SHA-256 哈希落库；cookie `HttpOnly` + `SameSite`，HTTPS 下加 `Secure`。
+- **CSRF**：`POST`/`PUT`/`PATCH`/`DELETE` 校验 `Origin`/`Referer` 属于平台主机、主应用或请求自身主机；带 cookie 时只信任自身主机、平台裸域与主应用。
 - **密码**：scrypt 加盐哈希，常数时间比较。
 - **密钥**：每用户 API key 以 AES-256-GCM 加密落库，主密钥来自 env 或 `<dataRoot>/secret.key`（0600）。
 - **路径**：所有文件操作先做词法包含校验，再逐段拒绝符号链接分量，防止越出用户根目录。
