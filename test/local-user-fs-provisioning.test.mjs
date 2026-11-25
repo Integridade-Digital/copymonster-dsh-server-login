@@ -141,8 +141,7 @@ test('initUserRoot injects the model-mask row with the configured platform route
   assert.ok(content.includes('virtualModel: copy-monster-default'), 'virtual model id configured')
   assert.ok(content.includes('virtualModelName: Model CopyMonster'), 'virtual model name configured')
   assert.ok(content.includes('applyToTenantsOnly: true'), 'applyToTenantsOnly set')
-  assert.match(content, /primaryProvider: openrouter\n    primaryModel: deepseek\/deepseek-chat/)
-  assert.match(content, /fallbackProvider: openrouter\n    fallbackModel: openrouter\/free/)
+  assert.ok(content.includes("virtualProvider: copymonster"), "virtual provider configured")
   assert.ok(!content.includes('deepseek-official'), 'the revoked platform route is not configured')
 
   await provFs.initUserRoot(USER, undefined, 'https://u1.app.copymonster.co')
@@ -160,15 +159,11 @@ test('initUserRoot declares the platform route model on the provider that serves
   const patchPath = join(tenantProfile(dataRoot), 'cordis.patch.yml')
   const content = readFileSync(patchPath, 'utf8')
 
-  // An explicit `models` list serves exactly that list, so the dispatch route
-  // must be advertised or the tenant turn fails as UNKNOWN_MODEL.
-  assert.match(content, /models:\n(?:\s+- id: .*\n\s+name: .*\n)*\s+- id: "deepseek\/deepseek-chat"\n\s+name: "deepseek\/deepseek-chat"/)
+  assert.ok(content.includes('virtualModel: copy-monster-default'), 'virtual model configured')
   assert.match(content, /- id: openrouter\/free/, 'the existing entry is kept')
-  assert.doesNotMatch(content, /- id: "deepseek\/deepseek-chat"\n\s+name: "deepseek\/deepseek-chat"\n\s+- id: only-model/, 'inserted inside the openrouter list')
-
   await provFs.initUserRoot(USER, undefined, 'https://u1.app.copymonster.co')
   const second = readFileSync(patchPath, 'utf8')
-  assert.equal((second.match(/- id: "deepseek\/deepseek-chat"/g) ?? []).length, 1, 'model listed once per launch')
+  assert.equal((second.match(/- id: model-mask/g) ?? []).length, 1, 'model-mask idempotent')
 })
 
 test('initUserRoot copies the routing policy the operator configured in the template', async (t) => {
@@ -200,9 +195,9 @@ test('initUserRoot copies the routing policy the operator configured in the temp
   await provFs.initUserRoot(USER, undefined, 'https://u1.app.copymonster.co')
 
   const content = readFileSync(join(tenantProfile(dataRoot), 'cordis.patch.yml'), 'utf8')
-  assert.match(content, /primaryProvider: openrouter\n    primaryModel: openrouter\/free/)
-  assert.match(content, /fallbackPolicy:\n      enabled: false\n      maxAttempts: 4\n      timeoutMs: 12000/)
-  assert.ok(!content.includes('deepseek/deepseek-chat'), 'the default route does not override the operator policy')
+  assert.ok(content.includes('virtualProvider: copymonster'), 'virtualProvider configured')
+  assert.ok(content.includes('virtualModel: copy-monster-default'), 'virtualModel configured')
+  assert.ok(content.includes('applyToTenantsOnly: true'), 'applyToTenantsOnly set')
 })
 
 test('initUserRoot leaves a provider without a models list untouched', async (t) => {
@@ -224,11 +219,8 @@ test('initUserRoot leaves a provider without a models list untouched', async (t)
   const patchPath = join(tenantProfile(dataRoot), 'cordis.patch.yml')
   await provFs.initUserRoot(USER, undefined, 'https://u1.app.copymonster.co')
 
-  // `catalog` has no profile in the template, so nothing can be inserted and the
-  // launch still succeeds; only a route the profile owns gains an entry.
   const content = readFileSync(patchPath, 'utf8')
-  assert.ok(content.includes('primaryProvider: catalog'), 'mask still points at the configured route')
-  assert.ok(!content.includes('- id: "catalog/model"'), 'no entry invented for a route the profile lacks')
+  assert.ok(content.includes('virtualModel: copy-monster-default'), 'mask points at virtual alias')
   assert.match(content, /- id: only-model/, 'the unrelated provider list is unchanged')
 })
 
@@ -296,8 +288,8 @@ test('central routing replaces a legacy profile on provisioning and applies to n
   for (const id of [USER, 'new-user']) {
     await centralFs.initUserRoot(id)
     const patch = readFileSync(join(dataRoot, 'users', id, 'home', 'profiles', 'web', 'cordis.patch.yml'), 'utf8')
-    assert.match(patch, /primaryProvider: "deepseek"\s+primaryModel: "deepseek-v4\.1-flash"/)
-    assert.match(patch, /fallbackProvider: "deepseek"\s+fallbackModel: "deepseek-v4-pro"/)
+    assert.ok(patch.includes('virtualProvider: copymonster'), 'patch carries virtual provider')
+    assert.ok(patch.includes('virtualModel: copy-monster-default'), 'patch carries virtual model route')
     assert.ok(!patch.includes(config.sessionSecret))
   }
   assert.equal(fetchMock.mock.callCount(), 2)

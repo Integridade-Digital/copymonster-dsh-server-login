@@ -7,6 +7,7 @@ import { assertProductionIsolation, resolveConfig } from '../lib/config.js'
 const BASE_ENV = {
   DSH_SERVER_LOGIN_SUPABASE_URL: 'https://example.supabase.co',
   DSH_SERVER_LOGIN_SUPABASE_ANON_KEY: 'anon-key',
+  DSH_SERVER_LOGIN_SUPABASE_SERVICE_ROLE_KEY: 'test-service-role-key',
   SESSION_SECRET: 'isolation-test-session-secret-32chars',
 }
 

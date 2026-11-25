@@ -24,10 +24,10 @@ export type FallbackChainStep = z.infer<typeof FallbackChainStepSchema>
  * Failover configuration schema.
  */
 export const FailoverConfigSchema = z.object({
-  enabled: z.boolean().default(true),
+  enabled: z.boolean().default(false),
   primary: z.object({
-    provider: z.string().min(1),
-    model: z.string().min(1),
+    provider: z.string().default(''),
+    model: z.string().default(''),
   }),
   chain: z.array(FallbackChainStepSchema).default([]),
 })
@@ -54,8 +54,8 @@ export type MaskConfig = z.infer<typeof MaskConfigSchema>
  * Route slot for specialized model routing (lightweight vs heavy tasks).
  */
 export const RouteSlotSchema = z.object({
-  provider: z.string().min(1),
-  model: z.string().min(1),
+  provider: z.string().default(''),
+  model: z.string().default(''),
   tasks: z.array(z.string()).default([]),
 })
 

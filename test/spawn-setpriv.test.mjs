@@ -26,8 +26,8 @@ test('sanitizePath: preserves custom paths and appends standard directories', ()
 })
 
 test('resolveBinary: leaves paths with slashes untouched', () => {
-  assert.equal(resolveBinary('/custom/bin/setpriv'), '/custom/bin/setpriv')
-  assert.equal(resolveBinary('./bin/setpriv'), './bin/setpriv')
+  assert.equal(resolveBinary('/custom/bin/custom-tool-nonexistent'), '/custom/bin/custom-tool-nonexistent')
+  assert.equal(resolveBinary('./bin/custom-tool-nonexistent'), './bin/custom-tool-nonexistent')
 })
 
 test('resolveBinary: resolves setpriv to existing system binary', () => {

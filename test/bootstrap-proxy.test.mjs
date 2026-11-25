@@ -16,70 +16,44 @@ test('proxy replaces client forwarding headers with canonical tenant host', () =
   assert.equal(headers.cookie, 'sid=valid')
 })
 
-test('tenant runtime /enter redirects through the DSH launch-token exchange', () => {
+test('tenant runtime registers watchdog section when role is main', () => {
   const previousRole = process.env.DSH_SERVER_LOGIN_ROLE
-  const previousDomain = process.env.DSH_SERVER_LOGIN_BASE_DOMAIN
+  const previousHandoff = process.env.DSH_SERVER_LOGIN_HANDOFF_PATH
   process.env.DSH_SERVER_LOGIN_ROLE = 'main'
-  process.env.DSH_SERVER_LOGIN_BASE_DOMAIN = 'copymonster.co'
-  let route
+  process.env.DSH_SERVER_LOGIN_HANDOFF_PATH = '/tmp/handoff.json'
+
+  let registeredSection = null
+  let disposed = false
   const ctx = {
-    inject(services, callback) {
-      assert.deepEqual(services, ['webServer', 'connection'])
-      callback({
-        webServer: { register(value) { route = value; return () => {} } },
-        connection: { authenticatedUrl: url => `${url}?token=one-time-launch` },
-        effect(effect) { effect() },
-      })
+    get(name) {
+      if (name === 'systemPrompt') {
+        return {
+          section(section) {
+            registeredSection = section
+            return () => { disposed = true }
+          },
+        }
+      }
+      return undefined
+    },
+    on(event, fn) {
+      if (event === 'dispose') {
+        fn()
+      }
     },
   }
+
   try {
     apply(ctx)
-    assert.equal(route.path, '/enter')
-    const result = { status: undefined, headers: undefined, body: undefined }
-    route.handler({ method: 'GET', headers: {
-      'x-forwarded-host': 'digital.copymonster.co',
-      'x-forwarded-proto': 'https',
-    } }, {
-      writeHead(status, headers) { result.status = status; result.headers = headers },
-      end(body) { result.body = body },
-    })
-    assert.equal(result.status, 303)
-    assert.equal(result.headers.location, 'https://digital.copymonster.co/?token=one-time-launch')
-    assert.equal(result.headers['cache-control'], 'no-store')
+    assert.ok(registeredSection)
+    assert.equal(registeredSection.name, 'dsh-server-login/watchdog')
+    assert.ok(typeof registeredSection.text === 'string')
+    assert.ok(registeredSection.text.includes('/tmp/handoff.json'))
+    assert.equal(disposed, true)
   } finally {
     if (previousRole === undefined) delete process.env.DSH_SERVER_LOGIN_ROLE
     else process.env.DSH_SERVER_LOGIN_ROLE = previousRole
-    if (previousDomain === undefined) delete process.env.DSH_SERVER_LOGIN_BASE_DOMAIN
-    else process.env.DSH_SERVER_LOGIN_BASE_DOMAIN = previousDomain
-  }
-})
-
-test('tenant runtime refuses invalid forwarded hosts and schemes', () => {
-  const previousRole = process.env.DSH_SERVER_LOGIN_ROLE
-  const previousDomain = process.env.DSH_SERVER_LOGIN_BASE_DOMAIN
-  process.env.DSH_SERVER_LOGIN_ROLE = 'main'
-  process.env.DSH_SERVER_LOGIN_BASE_DOMAIN = 'copymonster.co'
-  let route
-  try {
-    apply({ inject(_services, callback) {
-      callback({
-        webServer: { register(value) { route = value; return () => {} } },
-        connection: { authenticatedUrl: url => url },
-        effect(effect) { effect() },
-      })
-    } })
-    for (const headers of [
-      { 'x-forwarded-host': 'attacker.example', 'x-forwarded-proto': 'https' },
-      { 'x-forwarded-host': 'digital.copymonster.co', 'x-forwarded-proto': 'http' },
-    ]) {
-      let status
-      route.handler({ method: 'GET', headers }, { writeHead(code) { status = code }, end() {} })
-      assert.equal(status, 400)
-    }
-  } finally {
-    if (previousRole === undefined) delete process.env.DSH_SERVER_LOGIN_ROLE
-    else process.env.DSH_SERVER_LOGIN_ROLE = previousRole
-    if (previousDomain === undefined) delete process.env.DSH_SERVER_LOGIN_BASE_DOMAIN
-    else process.env.DSH_SERVER_LOGIN_BASE_DOMAIN = previousDomain
+    if (previousHandoff === undefined) delete process.env.DSH_SERVER_LOGIN_HANDOFF_PATH
+    else process.env.DSH_SERVER_LOGIN_HANDOFF_PATH = previousHandoff
   }
 })

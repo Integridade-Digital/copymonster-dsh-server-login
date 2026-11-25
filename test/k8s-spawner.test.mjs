@@ -70,6 +70,7 @@ function spawner(clients) {
     dshImage: 'acr/dsh:tag',
     supabaseUrl: 'https://test.supabase.co',
     supabaseAnonKey: 'test',
+    supabaseServiceRoleKey: 'test-service-role-key',
     sessionSecret: 'test-session-secret-32-characters!!',
   })
   const db = { findUserInstance: async () => undefined }
@@ -159,6 +160,7 @@ test('k8s: ensureFileService fails loudly without a control-plane image', async 
     dshImage: 'acr/dsh:tag',
     supabaseUrl: 'https://test.supabase.co',
     supabaseAnonKey: 'test',
+    supabaseServiceRoleKey: 'test-service-role-key',
     sessionSecret: 'test-session-secret-32-characters!!',
   })
   const s = new K8sSpawner(config, { findUserInstance: async () => undefined }, async () => null, async () => 100042, makeClients())

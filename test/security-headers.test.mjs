@@ -15,6 +15,7 @@ async function withServer(run) {
   process.env.DSH_SERVER_LOGIN_MAIN_APP_URL = 'https://app.copymonster.co'
   process.env.DSH_SERVER_LOGIN_SUPABASE_URL = 'https://test.supabase.co'
   process.env.DSH_SERVER_LOGIN_SUPABASE_ANON_KEY = 'test-anon-key'
+  process.env.DSH_SERVER_LOGIN_SUPABASE_SERVICE_ROLE_KEY = 'test-service-role-key'
 
   const config = resolveConfig(process.env)
   const app = await buildServer(config)

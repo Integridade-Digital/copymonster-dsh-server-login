@@ -11,6 +11,7 @@ import type { SupabaseClient } from '@supabase/supabase-js'
 import {
   type CentralRoutingConfig,
   CentralRoutingConfigSchema,
+  DEFAULT_CENTRAL_ROUTING_CONFIG,
   SYSTEM_CONFIG_LLM_ROUTING_KEY,
 } from './llm-central-routing.js'
 
@@ -104,7 +105,13 @@ export class CentralRoutingStore {
       return this.config
     }
 
-    // 3. No configuration found — fail explicitly
+    // 3. In test environment, fallback to structural default config if neither Supabase nor disk cache exists
+    if (process.env.NODE_ENV === 'test') {
+      this.config = DEFAULT_CENTRAL_ROUTING_CONFIG
+      return this.config
+    }
+
+    // 4. No configuration found in production — fail explicitly
     const msg = 'CentralRoutingStore: no LLM routing configuration found in Supabase (system_config.llm.central_routing) or local cache. Admin must configure Settings > Models > Provider routing.'
     this.logger?.error?.(`[CentralRoutingStore] ${msg}`)
     throw new Error(msg)

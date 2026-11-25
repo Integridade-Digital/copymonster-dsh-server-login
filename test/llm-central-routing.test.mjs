@@ -17,10 +17,14 @@ test('llm-central-routing schema: DEFAULT_CENTRAL_ROUTING_CONFIG is valid', () =
   assert.equal(config.mask.publicModelName, 'Model CopyMonster')
   assert.equal(config.mask.publicModelId, 'copy-monster-default')
   assert.equal(config.mask.applyToTenantsOnly, true)
-  assert.equal(config.routing.light.model, 'deepseek-v4.1-flash')
-  assert.equal(config.routing.heavy.model, 'deepseek-v4.1-pro')
-  assert.equal(config.failover.primary.model, 'deepseek-v4.1-pro')
-  assert.equal(config.failover.chain.length, 2)
+  assert.equal(config.routing.light.provider, '')
+  assert.equal(config.routing.light.model, '')
+  assert.equal(config.routing.heavy.provider, '')
+  assert.equal(config.routing.heavy.model, '')
+  assert.equal(config.failover.enabled, false)
+  assert.equal(config.failover.primary.provider, '')
+  assert.equal(config.failover.primary.model, '')
+  assert.equal(config.failover.chain.length, 0)
 })
 
 test('llm-central-routing schema: rejects invalid configs', () => {
@@ -41,22 +45,22 @@ test('llm-central-routing schema: rejects invalid configs', () => {
   })
 })
 
-test('CentralRoutingStore: falls back to defaults when Supabase is unavailable', async () => {
+test('CentralRoutingStore: throws when neither Supabase nor cache is available in production', async () => {
   const tmpDir = join('/tmp', `store-test-${Date.now()}`)
+  const prevEnv = process.env.NODE_ENV
+  process.env.NODE_ENV = 'production'
   const store = new CentralRoutingStore({
     cacheDir: tmpDir,
   })
 
-  const cfg = await store.loadOnBoot()
-  assert.equal(cfg.mask.publicModelName, 'Model CopyMonster')
-  assert.equal(cfg.routing.light.model, 'deepseek-v4.1-flash')
-
-  const cacheFile = join(tmpDir, 'llm-central-routing.cache.json')
-  assert.ok(existsSync(cacheFile))
-  const saved = JSON.parse(readFileSync(cacheFile, 'utf-8'))
-  assert.equal(saved.mask.publicModelName, 'Model CopyMonster')
-
-  rmSync(tmpDir, { recursive: true, force: true })
+  try {
+    await assert.rejects(async () => {
+      await store.loadOnBoot()
+    }, /no LLM routing configuration found/)
+  } finally {
+    process.env.NODE_ENV = prevEnv
+    rmSync(tmpDir, { recursive: true, force: true })
+  }
 })
 
 test('CentralRoutingStore: successfully loads and caches config from Supabase client', async () => {
