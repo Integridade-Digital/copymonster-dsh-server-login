@@ -352,8 +352,9 @@ function isBuildAsset(pathname: string, method: string): boolean {
 /**
  * Provision the tenant's root and start its DSH.
  *
- * The caller keeps waiting; a failure is logged with the tenant, the expected
- * and actual identity, and the reason, never with tenant data.
+ * The spawn runs without blocking the caller; a failure is logged with the
+ * tenant, the expected and actual identity, and the reason, never with tenant
+ * data.
  * @param app - server carrying the supervisor and per-user filesystem.
  * @param user - tenant to start.
  */
