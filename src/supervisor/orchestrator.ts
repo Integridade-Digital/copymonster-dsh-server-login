@@ -575,6 +575,9 @@ export class LocalSpawner implements Spawner {
       // Internal loopback LLM gateway endpoint & scoped session token
       COPYMONSTER_LLM_GATEWAY_URL: gatewayUrl,
       COPYMONSTER_INTERNAL_SESSION_TOKEN: sessionToken,
+      // Session secret & cookie domain so tenant DSH can validate main-app cookies
+      SESSION_SECRET: process.env.SESSION_SECRET!,
+      SESSION_COOKIE_DOMAIN: process.env.SESSION_COOKIE_DOMAIN ?? '.copymonster.co',
       ...keysForTenant,
     }
   }
