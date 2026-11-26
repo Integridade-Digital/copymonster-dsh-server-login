@@ -99,8 +99,15 @@ export function createPortGuard(enabled: boolean): PortGuard | undefined {
       removePort(port)
       // Insert at position 1 so an earlier ACCEPT (ufw / conntrack) can't
       // swallow the packet before the REJECT is evaluated.
-      execFileSync(iptablesBin, ruleArgs(port, '-I'))
-      guarded.add(port)
+      try {
+        execFileSync(iptablesBin, ruleArgs(port, '-I'))
+        guarded.add(port)
+      } catch (err) {
+        if ((err as NodeJS.ErrnoException).code === 'ENOENT') {
+          return
+        }
+        throw err
+      }
     },
     remove(port) {
       if (!guarded.has(port)) return

@@ -134,11 +134,13 @@ export class LocalSpawner implements Spawner {
     // Rules survive a restart in kernel state while this process's `guarded`
     // set does not, so clear stale copies before installing the current set.
     this.portGuard?.reset()
-    // Tenant processes run as their own uid. Without guarding the control plane,
-    // a tenant with a shell could reach the orchestrator (3081) and the LLM
-    // gateway (4010) directly, bypassing session auth and per-tenant metering.
+    // Tenant processes run as their own uid. Guard the control plane (3081)
+    // to prevent tenants with shells from reaching orchestrator APIs directly.
+    // The LLM gateway (4010) uses internal cryptographic session tokens
+    // (COPYMONSTER_INTERNAL_SESSION_TOKEN) validated per-request, and must be
+    // reachable from tenant processes to allow LLM inference.
     if (this.portGuard !== undefined) {
-      for (const port of new Set([config.port, config.llmGatewayPort])) {
+      for (const port of new Set([config.port])) {
         this.portGuard.install(port)
       }
     }

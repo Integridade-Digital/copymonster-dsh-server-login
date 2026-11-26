@@ -200,7 +200,7 @@ const DEFAULT_SPAWN_AS_USER_COMMAND = defaultSpawnAsUserCommand()
 const DEFAULT_BASE_UID = 100000
 const DEFAULT_BASE_DOMAIN = ''
 const DEFAULT_COOKIE_DOMAIN = ''
-const DEFAULT_ENABLE_PATCH = false
+const DEFAULT_ENABLE_PATCH = true
 
 /** systemd size syntax: a positive integer with an optional K/M/G/T suffix. */
 const MEMORY_MAX_PATTERN = /^[1-9][0-9]*[KMGT]?$/
