@@ -330,6 +330,8 @@ const PUBLIC_ASSET_PATHS: ReadonlySet<string> = new Set([
   '/brand-text-black.png',
   '/favicon.ico',
   '/favicon.png',
+  '/favicon.svg',
+  '/favicon-dark.svg',
   '/apple-touch-icon.png',
   '/auth-image.jpg',
   '/manifest.webmanifest',
