@@ -168,8 +168,52 @@ test('Fase 5 / Teste D: a starting tenant keeps the launching page', async () =>
   await app.close()
 })
 
-test('an upstream that never sends headers gets a bounded 504', { timeout: 5_000 }, async (t) => {
-  const upstream = createServer()
+test('Fase 5 / assets: an unauthenticated build asset reaches the tenant, never 401 JSON', { timeout: 5_000 }, async (t) => {
+  const upstream = createServer((req, res) => {
+    res.writeHead(200, { 'content-type': 'text/css' })
+    res.end('body{color:#000}')
+  })
+  upstream.listen(0, '127.0.0.1')
+  await once(upstream, 'listening')
+  const { app } = makeApp()
+  t.after(async () => {
+    upstream.closeAllConnections()
+    upstream.close()
+    await app.close()
+  })
+  app.supervisor.endpointFor = async () => ({ host: '127.0.0.1', port: upstream.address().port })
+  await registerDshProxy(app)
+
+  const res = await app.inject({
+    method: 'GET',
+    url: '/assets/vendor-D8VjKOCf.css',
+    headers: { host: `alice.${BASE_DOMAIN}`, accept: 'text/css,*/*;q=0.1' },
+  })
+  assert.equal(res.statusCode, 200)
+  assert.match(res.headers['content-type'], /text\/css/)
+  assert.equal(res.body, 'body{color:#000}')
+})
+
+test('Fase 5 / assets: a stopped tenant answers a build asset with a retry, not 404 JSON', async () => {
+  const { app } = makeApp()
+  let launches = 0
+  app.supervisor.launch = async () => {
+    launches += 1
+    return { id: 'inst-1', userId: 'tenant-user-1', role: 'main', folder: '/x', port: 4242, status: 'starting' }
+  }
+  await registerDshProxy(app)
+  const res = await app.inject({
+    method: 'GET',
+    url: '/assets/index-CM1L9Xvi.js',
+    headers: { host: `alice.${BASE_DOMAIN}`, accept: '*/*' },
+  })
+  assert.equal(res.statusCode, 503)
+  assert.equal(res.headers['retry-after'], '2')
+  assert.equal(launches, 1)
+  await app.close()
+})
+
+test('an upstream that never sends headers gets a bounded 504', { timeout: 5_000 }, async (t) => {  const upstream = createServer()
   upstream.listen(0, '127.0.0.1')
   await once(upstream, 'listening')
   const { app, tenant, sessions } = makeApp()

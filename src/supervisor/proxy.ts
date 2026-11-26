@@ -18,6 +18,7 @@ import { Agent, request as httpRequest, type IncomingHttpHeaders, type IncomingM
 import { connect } from 'node:net'
 import { requireAuth, resolveSessionClaims, resolveSessionUser } from '../web/middleware/authn.js'
 import type { SessionClaims } from '../web/session-cookie.js'
+import type { User } from '../db/types.js'
 import { IDENTITY_TTL_MS } from '../identity.js'
 import { ProvisioningConflict, type Endpoint, type TenantState } from './spawner.js'
 import { renderPatch } from './patch.js'
@@ -317,6 +318,98 @@ function getLaunchingHtml(): string {
   return cachedLaunchingHtml
 }
 
+/**
+ * Root-level files the SPA shell loads beside its hashed build output.
+ *
+ * `/brand.png`, `/favicon.ico`, and `/manifest.webmanifest` are also present in
+ * the orchestrator's own `web/` root, so they keep being served from there.
+ */
+const PUBLIC_ASSET_PATHS: ReadonlySet<string> = new Set([
+  '/brand.png',
+  '/brand-text.png',
+  '/brand-text-black.png',
+  '/favicon.ico',
+  '/favicon.png',
+  '/apple-touch-icon.png',
+  '/auth-image.jpg',
+  '/manifest.webmanifest',
+])
+
+/**
+ * Whether the request targets tenant build output rather than tenant data.
+ *
+ * `/assets/*` filenames are content-hashed and every tenant serves the same
+ * files, so answering them never discloses another user's data.
+ * @param pathname - request path without the query string.
+ * @param method - HTTP method.
+ * @returns true when the path is a public build asset.
+ */
+function isBuildAsset(pathname: string, method: string): boolean {
+  if (method !== 'GET' && method !== 'HEAD') return false
+  return pathname.startsWith('/assets/') || PUBLIC_ASSET_PATHS.has(pathname)
+}
+
+/**
+ * Provision the tenant's root and start its DSH.
+ *
+ * The caller keeps waiting; a failure is logged with the tenant, the expected
+ * and actual identity, and the reason, never with tenant data.
+ * @param app - server carrying the supervisor and per-user filesystem.
+ * @param user - tenant to start.
+ */
+async function launchTenant(app: FastifyInstance, user: User): Promise<void> {
+  const uid = user.uid ?? hashUid(user.id, app.config.baseUid)
+  await app.userFs.initUserRoot(user.id, uid, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === app.config.masterTenantUsername })
+  const folderAbs = app.userFs.resolvePath(user.id, '')
+  void app.supervisor.launch(
+    user.id,
+    folderAbs,
+    app.config.enablePatch ? renderPatch([]) : undefined,
+  ).catch((err: unknown) => {
+    app.log.error({
+      tenant: user.username,
+      userId: user.id,
+      expectedUid: uid,
+      actualUid: err instanceof ProvisioningConflict ? err.actual : undefined,
+      reason: err instanceof Error ? err.name : 'Error',
+    }, '[dsh-proxy] auto-launch failed')
+  })
+}
+
+/**
+ * Serve a build asset for the subdomain's tenant without a session.
+ *
+ * A browser holding a page whose cookie expired, or whose tenant is restarting,
+ * would otherwise receive `{"error":"unauthorized"}` or `{"error":"not_running"}`
+ * for its own stylesheets and scripts — JSON where the page expects CSS or JS.
+ * @param app - server carrying the supervisor and database.
+ * @param request - incoming asset request.
+ * @param reply - reply for the asset.
+ * @returns true when the request was answered here.
+ */
+async function serveBuildAsset(
+  app: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<boolean> {
+  const slug = parseSubdomain(clientHost(request.headers), app.config.baseDomain)
+  if (slug === null) return false
+  const user = await app.db.findUserBySlug(slug)
+  if (user === undefined) return false
+  const endpoint = await app.supervisor.endpointFor(user.id)
+  if (endpoint !== undefined) {
+    proxyHttp(request, reply, endpoint, request.raw.url ?? '/')
+    return true
+  }
+  // The shell is already open in this browser and only the tenant is missing:
+  // start it and tell the browser to retry instead of failing the asset.
+  const lifecycle = await app.supervisor.lifecycle?.(user.id)
+  if (lifecycle?.state !== 'failed') await launchTenant(app, user)
+  reply.header('cache-control', 'no-store').header('retry-after', '2').code(503)
+    .type('text/plain; charset=utf-8').send('')
+  return true
+}
+
 export async function registerDshProxy(app: FastifyInstance): Promise<void> {
   // Legacy authenticated subpath proxy.
   app.all('/u/:slug/dsh/*', { preHandler: requireAuth }, async (request, reply) => {
@@ -357,6 +450,11 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
     const publicAssets = ['/brand.png', '/favicon.ico', '/manifest.webmanifest']
     if (publicAssets.includes(pathname)) return
 
+    // Hashed build output is public and identical for every tenant. Proxy it
+    // before the session check so an expired cookie or a restarting tenant
+    // cannot answer a script or stylesheet request with JSON.
+    if (isBuildAsset(pathname, request.method) && await serveBuildAsset(app, request, reply)) return
+
     const access = await resolveSubdomainAccess(app, clientHost(request.headers), request.headers.cookie)
     if (access === null) return
     if ('error' in access) {
@@ -383,25 +481,7 @@ export async function registerDshProxy(app: FastifyInstance): Promise<void> {
         if (slug) {
           const user = await app.db.findUserBySlug(slug)
           if (user) {
-            const uid = user.uid ?? hashUid(user.id, app.config.baseUid)
-            await app.userFs.initUserRoot(user.id, uid, publicOriginForUser(app.config.baseDomain, user.username), { isAdmin: user.role === 'admin' || user.username === app.config.masterTenantUsername })
-            const folderAbs = app.userFs.resolvePath(user.id, '')
-            void app.supervisor.launch(
-              user.id,
-              folderAbs,
-              app.config.enablePatch ? renderPatch([]) : undefined,
-            ).catch((err: unknown) => {
-              // Log the tenant, the expected and actual identity, and the reason;
-              // never the tenant's own data.
-              const expectedUid = user.uid ?? hashUid(user.id, app.config.baseUid)
-              app.log.error({
-                tenant: user.username,
-                userId: user.id,
-                expectedUid,
-                actualUid: err instanceof ProvisioningConflict ? err.actual : undefined,
-                reason: err instanceof Error ? err.name : 'Error',
-              }, '[dsh-proxy] auto-launch failed')
-            })
+            await launchTenant(app, user)
             reply.header('cache-control', 'no-store').type('text/html; charset=utf-8').send(getLaunchingHtml())
             return
           }
