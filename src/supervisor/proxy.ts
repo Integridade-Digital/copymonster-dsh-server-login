@@ -395,7 +395,12 @@ async function serveBuildAsset(
   const slug = parseSubdomain(clientHost(request.headers), app.config.baseDomain)
   if (slug === null) return false
   const user = await app.db.findUserBySlug(slug)
-  if (user === undefined) return false
+  if (user === undefined) {
+    // The edge caches `/assets/*.js|css` by extension for hours, so an error
+    // here must never become a cacheable answer for a later valid request.
+    reply.header('cache-control', 'no-store').code(404).send({ error: 'unknown_user' })
+    return true
+  }
   const endpoint = await app.supervisor.endpointFor(user.id)
   if (endpoint !== undefined) {
     proxyHttp(request, reply, endpoint, request.raw.url ?? '/')
