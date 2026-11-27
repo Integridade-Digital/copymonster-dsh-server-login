@@ -575,6 +575,11 @@ export class LocalSpawner implements Spawner {
       // Internal loopback LLM gateway endpoint & scoped session token
       COPYMONSTER_LLM_GATEWAY_URL: gatewayUrl,
       COPYMONSTER_INTERNAL_SESSION_TOKEN: sessionToken,
+      // The dsh-image-gen plugin (openai-compat relay) authenticates against
+      // this same gateway with the tenant's scoped session token, so tenants
+      // never need their own provider API key. The gateway injects the master
+      // credentials and debits the tenant's quota.
+      DSH_IMAGE_GEN_OPENAI_COMPAT_KEY: sessionToken,
       // Session secret & cookie domain so tenant DSH can validate main-app cookies
       SESSION_SECRET: process.env.SESSION_SECRET!,
       SESSION_COOKIE_DOMAIN: process.env.SESSION_COOKIE_DOMAIN ?? '.copymonster.co',
